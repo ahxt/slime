@@ -545,8 +545,12 @@ class MegatronTrainRayActor(TrainRayActor):
                 ray.get(self.rollout_manager.recover_updatable_engines.remote())
             dist.barrier(group=get_gloo_group())
 
+        # Multi-policy: route to this policy's paired sglang server. Single-policy
+        # train.py builds args without policy_name → getattr returns None →
+        # get_engines_and_lock falls back to _get_updatable_server (legacy path).
+        policy_name = getattr(self.args, "policy_name", None)
         rollout_engines, rollout_engine_lock, num_new_engines, engine_gpu_counts, engine_gpu_offsets = ray.get(
-            self.rollout_manager.get_updatable_engines_and_lock.remote()
+            self.rollout_manager.get_engines_and_lock.remote(policy_name=policy_name)
         )
 
         if self.args.offload_train:
