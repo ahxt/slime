@@ -48,6 +48,14 @@ class Sample:
     # Session ID for consistent hashing routing (used when router policy is consistent_hashing)
     session_id: str | None = None
 
+    # Multi-policy routing tag.
+    #   None      → sample feeds the legacy single-policy buffer (default; bit-for-bit
+    #               compatible with single-policy GRPO / PPO / OPD pre-fork)
+    #   "<name>"  → sample feeds the buffer of the policy named <name>
+    #               (only meaningful when running with multi-policy config; the manager
+    #               routes via _split_by_policy)
+    policy_name: str | None = None
+
     non_generation_time: float = 0.0  # time spent in non-generation steps
 
     @dataclass
