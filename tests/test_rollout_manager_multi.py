@@ -204,6 +204,30 @@ class TestGetEnginesAndLock:
         engines, _, _, gpu_counts, _ = mgr.get_engines_and_lock(policy_name="rewriter")
         assert engines == ["rewriter-e0"]
 
+    def test_colocated_offsets_are_policy_relative(self):
+        servers = {
+            "rewriter": _FakeServer(
+                "rewriter",
+                engines=["rewriter-e0"],
+                engine_gpu_counts=[2],
+                engine_gpu_offsets=[2],
+            ),
+        }
+        mgr = _make_manager(servers)
+        mgr.register_policy(
+            "rewriter",
+            "rewriter",
+            Namespace(
+                colocate=True,
+                actor_gpu_offset=2,
+                actor_num_nodes=1,
+                actor_num_gpus_per_node=2,
+            ),
+        )
+
+        _, _, _, _, gpu_offsets = mgr.get_engines_and_lock(policy_name="rewriter")
+        assert gpu_offsets == [0]
+
     def test_unknown_policy_raises(self):
         mgr = _make_manager({"solver": _FakeServer("solver")})
         with pytest.raises(ValueError, match="no registered sglang server"):
@@ -223,6 +247,19 @@ class TestGetEnginesAndLock:
         engines, _, num_new, _, _ = mgr.get_updatable_engines_and_lock()
         assert engines == ["engine-solver-0"]
         assert num_new == 2
+
+    def test_clear_num_new_engines_routes_by_policy(self):
+        servers = {
+            "solver": _FakeServer("solver", num_new_engines=1),
+            "rewriter": _FakeServer("rewriter", num_new_engines=2),
+        }
+        mgr = _make_manager(servers)
+        mgr.register_policy("solver", "solver", Namespace())
+        mgr.register_policy("rewriter", "rewriter", Namespace())
+
+        mgr.clear_updatable_num_new_engines(policy_name="rewriter")
+        assert servers["solver"].num_new_engines == 1
+        assert servers["rewriter"].num_new_engines == 0
 
 
 # ────────────────────────────────────────────────────────────────────────────

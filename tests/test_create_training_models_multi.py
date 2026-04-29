@@ -163,6 +163,26 @@ class TestBasicConstruction:
         assert handles["solver"].args.policy_name == "solver"
         assert handles["rewriter"].args.policy_name == "rewriter"
 
+    def test_handle_args_has_actor_gpu_offset(self):
+        """Colocated weight sync needs the global actor-slice start so rollout
+        manager can return policy-relative engine GPU offsets."""
+        from slime.ray.placement_group import create_training_models_multi
+
+        cfgs = [
+            _policy("solver", num_gpus_per_node=2),
+            _policy("rewriter", num_gpus_per_node=2),
+            _policy("selector", num_gpus_per_node=2),
+        ]
+        pgs = {c.name: ("pg", [], []) for c in cfgs}
+        rm = _make_rollout_manager()
+
+        with _patch_allocate([[0], [0], [0]]):
+            handles = create_training_models_multi(_base_args(colocate=True), pgs, rm, cfgs)
+
+        assert handles["solver"].args.actor_gpu_offset == 0
+        assert handles["rewriter"].args.actor_gpu_offset == 2
+        assert handles["selector"].args.actor_gpu_offset == 4
+
     def test_handle_args_inherits_global_fields(self):
         """Per-policy namespace pulls global args (kl_coef, etc.) before overlaying
         PolicyConfig fields."""

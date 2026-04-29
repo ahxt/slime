@@ -508,6 +508,34 @@ class RolloutManager:
         if train_parallel_config is not None:
             self._policy_train_parallel_config[policy_name] = train_parallel_config
 
+    def _policy_relative_engine_gpu_offsets(self, srv: RolloutServer, policy_name: str | None) -> list[int]:
+        offsets = list(srv.engine_gpu_offsets)
+        if policy_name is None:
+            return offsets
+
+        policy_args = self._policy_args.get(policy_name)
+        if policy_args is None or not getattr(policy_args, "colocate", False):
+            return offsets
+
+        actor_offset = getattr(policy_args, "actor_gpu_offset", None)
+        if actor_offset is None:
+            return offsets
+
+        actor_gpus = policy_args.actor_num_nodes * policy_args.actor_num_gpus_per_node
+        counts = srv.engine_gpu_counts
+        relative_offsets = []
+        for offset, count in zip(offsets, counts, strict=True):
+            relative = offset - actor_offset
+            if relative < 0 or relative + count > actor_gpus:
+                raise ValueError(
+                    f"policy {policy_name!r} rollout engine GPU range "
+                    f"[{offset}, {offset + count}) is outside actor GPU slice "
+                    f"[{actor_offset}, {actor_offset + actor_gpus}); colocated "
+                    f"multi-policy weight sync requires matching actor/rollout slices"
+                )
+            relative_offsets.append(relative)
+        return relative_offsets
+
     @property
     def rollout_engines(self):
         """All node-0 engines across all servers / models."""
@@ -554,7 +582,7 @@ class RolloutManager:
             self.rollout_engine_lock,
             srv.num_new_engines,
             srv.engine_gpu_counts,
-            srv.engine_gpu_offsets,
+            self._policy_relative_engine_gpu_offsets(srv, policy_name),
         )
 
     def get_num_rollout_per_epoch(self):
@@ -666,9 +694,17 @@ class RolloutManager:
             srv.engine_gpu_offsets,
         )
 
-    def clear_updatable_num_new_engines(self):
+    def clear_updatable_num_new_engines(self, policy_name: str | None = None):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
-        srv = self._get_updatable_server()
+        if policy_name is None:
+            srv = self._get_updatable_server()
+        else:
+            if policy_name not in self._policy_to_server:
+                raise ValueError(
+                    f"policy {policy_name!r} has no registered sglang server; "
+                    f"Currently registered: {list(self._policy_to_server)}"
+                )
+            srv = self._get_server(self._policy_to_server[policy_name])
         if srv:
             srv.num_new_engines = 0
 

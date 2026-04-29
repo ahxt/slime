@@ -6,7 +6,7 @@
 #   load, save                           — checkpoint dirs (per-policy)
 #   ref_load                             — KL ref checkpoint (optional)
 #   buffer_mode                          — "split" | "shared". Routes Sample.policy_name.
-#   num_gpus_per_node                    — cluster-level GPU count per node (same for both sides)
+#   num_gpus_per_node                    — v1 per-policy GPU slice size (2 here: 3 policies × 2 = 6 H200)
 #   megatron_num_nodes                   — Megatron actor placement (world_size = nodes × num_gpus_per_node)
 #   sglang_num_nodes                     — sglang engine placement for this policy's 1:1 engine
 #                                          (sglang_num_nodes × num_gpus_per_node must equal
@@ -30,22 +30,22 @@ policies:
   - name: solver
     role: actor
 
-    hf_checkpoint: /root/Qwen3-30B-A3B
-    load: /ckpt/multi_policy_multi_agent/solver
-    save: /ckpt/multi_policy_multi_agent/solver
-    # ref_load: /root/Qwen3-30B-A3B_torch_dist   # uncomment for KL ref
+    hf_checkpoint: Qwen/Qwen3.5-0.8B
+    load: /ckpt/multi_policy_multi_agent/qwen3.5-0.8b/solver
+    save: /ckpt/multi_policy_multi_agent/qwen3.5-0.8b/solver
+    # ref_load: /ckpt/qwen3.5-0.8b/ref   # uncomment for KL ref
 
     buffer_mode: split
 
-    num_gpus_per_node: 8
+    num_gpus_per_node: 2
     megatron_num_nodes: 1
     sglang_num_nodes: 1
 
     megatron:
-      tensor_model_parallel_size: 4
+      tensor_model_parallel_size: 2
       pipeline_model_parallel_size: 1
       context_parallel_size: 1
-      expert_model_parallel_size: 8
+      expert_model_parallel_size: 1
       expert_tensor_parallel_size: 1
       sequence_parallel: true
 
@@ -73,12 +73,12 @@ policies:
       eps_clip: 0.2
       eps_clip_high: 0.28
       kl_coef: 0
-      use_kl_loss: true
+      use_kl_loss: false
       kl_loss_coef: 0
 
     sglang:
       update_weights: true
-      num_gpus_per_engine: 8
+      num_gpus_per_engine: 2
       # model_path defaults to top-level hf_checkpoint
 
       mem_fraction_static: 0.7
@@ -97,27 +97,27 @@ policies:
 
       server_groups:
         - worker_type: regular          # regular | prefill | decode | placeholder | encoder
-          num_gpus: 8
+          num_gpus: 2
 
   # ─── rewriter ─────────────────────────────────────────────────────────────
   - name: rewriter
     role: actor
 
-    hf_checkpoint: /root/Qwen3-30B-A3B
-    load: /ckpt/multi_policy_multi_agent/rewriter
-    save: /ckpt/multi_policy_multi_agent/rewriter
+    hf_checkpoint: Qwen/Qwen3.5-0.8B
+    load: /ckpt/multi_policy_multi_agent/qwen3.5-0.8b/rewriter
+    save: /ckpt/multi_policy_multi_agent/qwen3.5-0.8b/rewriter
 
     buffer_mode: split
 
-    num_gpus_per_node: 8
+    num_gpus_per_node: 2
     megatron_num_nodes: 1
     sglang_num_nodes: 1
 
     megatron:
-      tensor_model_parallel_size: 4
+      tensor_model_parallel_size: 2
       pipeline_model_parallel_size: 1
       context_parallel_size: 1
-      expert_model_parallel_size: 8
+      expert_model_parallel_size: 1
       expert_tensor_parallel_size: 1
       sequence_parallel: true
 
@@ -144,12 +144,12 @@ policies:
       n_samples_per_prompt: 8
       eps_clip: 0.2
       kl_coef: 0
-      use_kl_loss: true
+      use_kl_loss: false
       kl_loss_coef: 0
 
     sglang:
       update_weights: true
-      num_gpus_per_engine: 8
+      num_gpus_per_engine: 2
 
       mem_fraction_static: 0.7
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
@@ -160,27 +160,27 @@ policies:
 
       server_groups:
         - worker_type: regular
-          num_gpus: 8
+          num_gpus: 2
 
   # ─── selector ─────────────────────────────────────────────────────────────
   - name: selector
     role: actor
 
-    hf_checkpoint: /root/Qwen3-30B-A3B
-    load: /ckpt/multi_policy_multi_agent/selector
-    save: /ckpt/multi_policy_multi_agent/selector
+    hf_checkpoint: Qwen/Qwen3.5-0.8B
+    load: /ckpt/multi_policy_multi_agent/qwen3.5-0.8b/selector
+    save: /ckpt/multi_policy_multi_agent/qwen3.5-0.8b/selector
 
     buffer_mode: split
 
-    num_gpus_per_node: 8
+    num_gpus_per_node: 2
     megatron_num_nodes: 1
     sglang_num_nodes: 1
 
     megatron:
-      tensor_model_parallel_size: 4
+      tensor_model_parallel_size: 2
       pipeline_model_parallel_size: 1
       context_parallel_size: 1
-      expert_model_parallel_size: 8
+      expert_model_parallel_size: 1
       expert_tensor_parallel_size: 1
       sequence_parallel: true
 
@@ -207,12 +207,12 @@ policies:
       n_samples_per_prompt: 8     # N parallel selectors per problem (matches num_parallel)
       eps_clip: 0.2
       kl_coef: 0
-      use_kl_loss: true
+      use_kl_loss: false
       kl_loss_coef: 0
 
     sglang:
       update_weights: true
-      num_gpus_per_engine: 8
+      num_gpus_per_engine: 2
 
       mem_fraction_static: 0.7
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
@@ -223,4 +223,4 @@ policies:
 
       server_groups:
         - worker_type: regular
-          num_gpus: 8
+          num_gpus: 2

@@ -290,8 +290,11 @@ def create_training_models_multi(args, pgs, rollout_manager, policy_configs):
 
     # ── Build N RayTrainGroups + register each with the rollout manager ──
     handles: dict[str, PolicyHandle] = {}
+    actor_gpu_offset = 0
     for cfg in policy_configs:
         args_p = config_to_namespace(cfg, args)
+        args_p.actor_gpu_offset = actor_gpu_offset
+        actor_gpu_offset += cfg.megatron_num_nodes * cfg.num_gpus_per_node
         train_group = allocate_train_group(
             args=args_p,
             num_nodes=cfg.megatron_num_nodes,

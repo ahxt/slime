@@ -93,8 +93,8 @@ class TestExampleConfig:
     def test_megatron_fields_flattened(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         solver = cfgs[0]
-        assert solver.tensor_model_parallel_size == 4
-        assert solver.expert_model_parallel_size == 8
+        assert solver.tensor_model_parallel_size == 2
+        assert solver.expert_model_parallel_size == 1
         assert solver.lr == 1.0e-6
         assert solver.optimizer_cpu_offload is True
         assert solver.advantage_estimator == "grpo"
@@ -119,7 +119,7 @@ class TestExampleConfig:
     def test_placement_fields(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         for c in cfgs:
-            assert c.num_gpus_per_node == 8
+            assert c.num_gpus_per_node == 2
             assert c.megatron_num_nodes == 1
             assert c.sglang_num_nodes == 1
 
@@ -285,9 +285,9 @@ class TestClusterSizing:
     def test_example_config_sizes(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         actor, rollout, total = derive_cluster_sizing(cfgs, colocate=True)
-        assert (actor, rollout, total) == (24, 24, 24)
+        assert (actor, rollout, total) == (6, 6, 6)
         actor, rollout, total = derive_cluster_sizing(cfgs, colocate=False)
-        assert (actor, rollout, total) == (24, 24, 48)
+        assert (actor, rollout, total) == (6, 6, 12)
 
     def test_split_sizes(self):
         # actor: 1×4 + 2×4 = 12; rollout: 1×4 + 1×4 = 8
@@ -329,13 +329,13 @@ class TestBuildSglangConfig:
         sglang_config = build_sglang_config_from_policies(cfgs)
         assert all(m.update_weights is True for m in sglang_config.models)
 
-    def test_each_model_has_one_server_group_with_8_gpus(self):
+    def test_each_model_has_one_server_group_with_2_gpus(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         sglang_config = build_sglang_config_from_policies(cfgs)
         for m in sglang_config.models:
             assert len(m.server_groups) == 1
             g = m.server_groups[0]
-            assert g.num_gpus == 8
+            assert g.num_gpus == 2
             assert g.worker_type == "regular"
 
     def test_server_args_folded_into_overrides(self):
@@ -379,29 +379,29 @@ class TestBuildSglangConfig:
 class TestDerivePolicySlices:
     def test_three_policies_colocate(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
-        # Colocate: total=24, all three policies share the 24-GPU pool with the rollout
-        slices = derive_policy_slices(cfgs, list(range(24)), colocate=True)
-        assert slices["solver"] == list(range(0, 8))
-        assert slices["rewriter"] == list(range(8, 16))
-        assert slices["selector"] == list(range(16, 24))
-        assert slices["rollout"] == list(range(24))   # rollout shares the whole pool
+        # Colocate: total=6, all three policies share the 6-GPU pool with the rollout
+        slices = derive_policy_slices(cfgs, list(range(6)), colocate=True)
+        assert slices["solver"] == list(range(0, 2))
+        assert slices["rewriter"] == list(range(2, 4))
+        assert slices["selector"] == list(range(4, 6))
+        assert slices["rollout"] == list(range(6))   # rollout shares the whole pool
 
     def test_three_policies_no_colocate(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
-        # No colocate: total=48, actors get 0..23, rollout gets 24..47
-        slices = derive_policy_slices(cfgs, list(range(48)), colocate=False)
-        assert slices["solver"] == list(range(0, 8))
-        assert slices["rewriter"] == list(range(8, 16))
-        assert slices["selector"] == list(range(16, 24))
-        assert slices["rollout"] == list(range(24, 48))
+        # No colocate: total=12, actors get 0..5, rollout gets 6..11
+        slices = derive_policy_slices(cfgs, list(range(12)), colocate=False)
+        assert slices["solver"] == list(range(0, 2))
+        assert slices["rewriter"] == list(range(2, 4))
+        assert slices["selector"] == list(range(4, 6))
+        assert slices["rollout"] == list(range(6, 12))
 
     def test_disjoint_actor_slices(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
-        slices = derive_policy_slices(cfgs, list(range(48)), colocate=False)
+        slices = derive_policy_slices(cfgs, list(range(12)), colocate=False)
         actor_idxs = (
             set(slices["solver"]) | set(slices["rewriter"]) | set(slices["selector"])
         )
-        assert len(actor_idxs) == 24  # no overlap between actor slices
+        assert len(actor_idxs) == 6  # no overlap between actor slices
 
     def test_two_policies_disjoint(self):
         cfgs = [
@@ -676,7 +676,7 @@ class TestEndToEndPipeline:
 
         # Cluster sizing
         actor, rollout, total = derive_cluster_sizing(cfgs, colocate=True)
-        assert (actor, rollout, total) == (24, 24, 24)
+        assert (actor, rollout, total) == (6, 6, 6)
 
         # Slicing
         slices = derive_policy_slices(cfgs, list(range(total)), colocate=True)
@@ -799,7 +799,7 @@ class TestLauncherConsistency:
     def test_launcher_uses_colocate(self):
         with open(self.LAUNCHER_PATH) as f:
             launcher = f.read()
-        # NUM_GPUS=24 only matches the colocate sizing; without --colocate it'd be 48
+        # NUM_GPUS=6 only matches the colocate sizing; without --colocate it'd be 12
         assert "--colocate" in launcher, "launcher passes --colocate to train_multi_policy.py"
 
     def test_launcher_passes_config_flag(self):
@@ -979,13 +979,13 @@ class TestSglangProjectionTypes:
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         sg = build_sglang_config_from_policies(cfgs)
         for m in sg.models:
-            assert m.model_path == "/root/Qwen3-30B-A3B"
+            assert m.model_path == "Qwen/Qwen3.5-0.8B"
 
     def test_num_gpus_per_engine_passed_through(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         sg = build_sglang_config_from_policies(cfgs)
         for m in sg.models:
-            assert m.num_gpus_per_engine == 8
+            assert m.num_gpus_per_engine == 2
 
 
 # ────────────────────────────────────────────────────────────────────────────

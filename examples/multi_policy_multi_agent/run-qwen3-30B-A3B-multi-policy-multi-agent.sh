@@ -24,10 +24,10 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "/root/slime/scripts/models/qwen3-30B-A3B.sh"
+source "${SCRIPT_DIR}/../../scripts/models/qwen3.5-0.8B.sh"
 
 # Per-policy fields (parallel, recompute, batching, optimizer, loss, paths)
-# all live in config_megatron.yaml — one block per actor.
+# all live in config.yaml — one block per actor.
 # Globals (rollout cadence, wandb, sglang infra, attention defaults) stay as CLI args.
 
 ROLLOUT_ARGS=(
@@ -40,6 +40,9 @@ ROLLOUT_ARGS=(
    --rm-type deepscaler
    --num-rollout 3000
    --rollout-batch-size 32
+   --n-samples-per-prompt 8
+   --global-batch-size 256
+   --disable-rollout-trim-samples
    --rollout-max-context-len 16384
    --rollout-max-response-len 8192
    --rollout-temperature 1
@@ -48,12 +51,12 @@ ROLLOUT_ARGS=(
 
 # Cluster sizing — derived from config.yaml:
 #   actor_gpus   = sum(policies[i].megatron_num_nodes * num_gpus_per_node)
-#                = 3 × 1 × 8 = 24
+#                = 3 × 1 × 2 = 6
 #   rollout_gpus = sum(policies[i].sglang_num_nodes   * num_gpus_per_node)
-#                = 3 × 1 × 8 = 24
-#   total (colocate) = max(actor_gpus, rollout_gpus) = 24
-#   total (separate) = actor_gpus + rollout_gpus     = 48
-NUM_GPUS=24
+#                = 3 × 1 × 2 = 6
+#   total (colocate) = max(actor_gpus, rollout_gpus) = 6
+#   total (separate) = actor_gpus + rollout_gpus     = 12
+NUM_GPUS=6
 
 TRAIN_ARGS=(
    --config "${SCRIPT_DIR}/config.yaml"
@@ -73,7 +76,7 @@ EVAL_ARGS=(
    --eval-top-p 1
 )
 
-# PERF and OPTIMIZER are per-policy in config_megatron.yaml.
+# PERF and OPTIMIZER are per-policy in config.yaml.
 # Each policy declares its own: tensor_model_parallel_size, sequence_parallel,
 # recompute_*, use_dynamic_batch_size, max_tokens_per_gpu, optimizer, lr,
 # lr_decay_style, weight_decay, adam_beta*, optimizer_cpu_offload, etc.
@@ -81,7 +84,7 @@ EVAL_ARGS=(
 WANDB_ARGS=(
    #--use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3-30B-A3B-multi-policy-multi-agent
+   # --wandb-group qwen3.5-0.8B-multi-policy-multi-agent
 )
 
 # sglang server args are per-policy in config.yaml (sglang sub-block).
