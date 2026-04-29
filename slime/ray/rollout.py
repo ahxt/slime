@@ -573,8 +573,41 @@ class RolloutManager:
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
-        data = self._convert_samples_to_train_data(data)
-        return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
+
+        # Legacy single-policy: register_policy was never called → bit-for-bit
+        # original code path. Returns a list of dp-partitioned batches.
+        if not self._policy_to_server:
+            train_data = self._convert_samples_to_train_data(data)
+            return self._split_train_data_by_dp(train_data, self.train_parallel_config["dp_size"])
+
+        # Multi-policy: bucket by Sample.policy_name, convert per-policy (each
+        # reads its own args for advantage_estimator / n_samples_per_prompt) and
+        # split by each policy's dp_size. Returns dict[name, list[batch_per_dp]].
+        buckets = self._split_by_policy(data)
+        if list(buckets.keys()) == ["__shared__"]:
+            raise ValueError(
+                f"Multi-policy mode active (registered: {list(self._policy_to_server)}) "
+                f"but rollout produced {len(data)} samples with no Sample.policy_name set. "
+                f"The rollout function must tag each sample with its target policy."
+            )
+        out: dict[str, list] = {}
+        for name, bucket in buckets.items():
+            if name == "__shared__":
+                logger.warning(
+                    f"rollout {rollout_id}: dropping {len(bucket)} samples with no "
+                    f"policy_name (mixed shared+split routing is a v2 feature)"
+                )
+                continue
+            if name not in self._policy_to_server:
+                raise ValueError(
+                    f"Sample.policy_name={name!r} but {name!r} is not a registered policy. "
+                    f"Registered: {list(self._policy_to_server)}"
+                )
+            policy_args = self._policy_args.get(name, self.args)
+            tp_cfg = self._policy_train_parallel_config.get(name, self.train_parallel_config)
+            train_data = self._convert_samples_to_train_data(bucket, policy_args=policy_args)
+            out[name] = self._split_train_data_by_dp(train_data, tp_cfg["dp_size"])
+        return out
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -738,26 +771,47 @@ class RolloutManager:
 
             torch.save(dict(rollout_id=rollout_id, **dump_data), path)
 
-    def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
-        if self.custom_reward_post_process_func is not None:
-            return self.custom_reward_post_process_func(self.args, samples)
+    def _split_by_policy(self, samples: list[Sample]) -> dict[str, list[Sample]]:
+        """Bucket samples by Sample.policy_name. {"__shared__": samples} when none tagged.
 
-        raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
+        Used by generate() to dispatch between the legacy single-buffer path and the
+        multi-policy split-buffer path. Pure function over the samples list.
+        """
+        if not any(getattr(s, "policy_name", None) for s in samples):
+            return {"__shared__": samples}
+        out: dict[str, list[Sample]] = {}
+        for s in samples:
+            out.setdefault(getattr(s, "policy_name", None) or "__shared__", []).append(s)
+        return out
+
+    def _post_process_rewards(
+        self,
+        samples: list[Sample] | list[list[Sample]],
+        policy_args=None,
+    ):
+        # Multi-policy: each policy reads its own n_samples_per_prompt /
+        # advantage_estimator / rewards_normalization for the group-norm reshape.
+        # Legacy single-policy callers pass nothing → falls back to self.args.
+        args = policy_args if policy_args is not None else self.args
+        if self.custom_reward_post_process_func is not None:
+            return self.custom_reward_post_process_func(args, samples)
+
+        raw_rewards = [sample.get_reward_value(args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
-            and self.args.rewards_normalization
+            args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
+            and args.rewards_normalization
         ):
             # group norm
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
+            if rewards.shape[-1] == args.n_samples_per_prompt * args.rollout_batch_size:
+                rewards = rewards.reshape(-1, args.n_samples_per_prompt)
             else:
                 # when samples count are not equal in each group
                 rewards = rewards.view(-1, rewards.shape[-1])
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+            if args.advantage_estimator in ["grpo", "gspo"] and args.grpo_std_normalization:
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
 
@@ -765,14 +819,21 @@ class RolloutManager:
 
         return raw_rewards, raw_rewards
 
-    def _convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample]]):
+    def _convert_samples_to_train_data(
+        self,
+        samples: list[Sample] | list[list[Sample]],
+        policy_args=None,
+    ):
         """
         Convert inference generated samples to training data.
-        """
-        if self.custom_convert_samples_to_train_data_func is not None:
-            return self.custom_convert_samples_to_train_data_func(self.args, samples)
 
-        raw_rewards, rewards = self._post_process_rewards(samples)
+        policy_args: per-policy args namespace (multi-policy mode). None → self.args.
+        """
+        args = policy_args if policy_args is not None else self.args
+        if self.custom_convert_samples_to_train_data_func is not None:
+            return self.custom_convert_samples_to_train_data_func(args, samples)
+
+        raw_rewards, rewards = self._post_process_rewards(samples, policy_args=policy_args)
 
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
