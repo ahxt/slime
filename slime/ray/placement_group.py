@@ -270,20 +270,49 @@ def create_placement_groups_multi(args, policy_configs):
 
 
 def create_rollout_manager_multi(args, pg, sglang_config):
-    """Multi-policy rollout manager — STUB until Step 4 lands.
+    """Multi-policy rollout manager. Thin bridge: serializes the per-policy
+    SglangConfig back to a temp YAML, sets args.sglang_config to that path, and
+    delegates to the existing single-policy create_rollout_manager.
 
-    The real implementation requires modifications to RolloutManager:
-      - RolloutManager.register_policy(name, server_name, args)
-      - RolloutManager._get_server(name)
-      - RolloutManager.get_engines_and_lock(policy_name=...)
-      - per-policy buffer split (Step 2)
+    This keeps slime/ray/rollout.py:_resolve_sglang_config completely untouched —
+    we go through the same code path as a manually-written --sglang-config YAML.
 
-    Step 7 only ships the placement-group side. Calling this raises so callers
-    fail fast with a clear pointer to Step 4. Run via the legacy train.py for
-    single-policy in the meantime.
+    The driver (train_multi_policy.py) sets args.rollout_num_gpus from
+    derive_cluster_sizing before calling here, so the assertion at
+    _resolve_sglang_config (rollout.py:1126) `actual == expected` is satisfied:
+      actual   = sglang_config.total_num_gpus = sum(server_groups[].num_gpus)
+      expected = args.rollout_num_gpus        = sum(sglang_num_nodes × num_gpus_per_node)
+    These are equal by config.yaml's validate_policy_config (sglang placement
+    consistency check).
+
+    Per-policy registration (RolloutManager.register_policy) is NOT done here —
+    that's PolicyRegistry's job (it has the full per-policy Namespace). Calling
+    register_policy here would double-register and trigger the "already bound"
+    check.
     """
-    raise NotImplementedError(
-        "create_rollout_manager_multi requires Step 4 (RolloutManager per-policy "
-        "registration + name-based engine routing). Step 7 only ships placement "
-        "groups. See plan.md for status. Use train.py for single-policy runs."
-    )
+    import tempfile
+
+    import yaml
+
+    # Project SglangConfig back to the YAML schema upstream expects.
+    yaml_dict: dict = {"sglang": []}
+    for m in sglang_config.models:
+        entry: dict = {"name": m.name, "update_weights": m.update_weights, "server_groups": []}
+        if m.model_path is not None:
+            entry["model_path"] = m.model_path
+        if m.num_gpus_per_engine is not None:
+            entry["num_gpus_per_engine"] = m.num_gpus_per_engine
+        for g in m.server_groups:
+            gd: dict = {"worker_type": g.worker_type, "num_gpus": g.num_gpus}
+            if g.num_gpus_per_engine is not None:
+                gd["num_gpus_per_engine"] = g.num_gpus_per_engine
+            if g.overrides:
+                gd["overrides"] = g.overrides
+            entry["server_groups"].append(gd)
+        yaml_dict["sglang"].append(entry)
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.dump(yaml_dict, f)
+        args.sglang_config = f.name
+
+    return create_rollout_manager(args, pg)

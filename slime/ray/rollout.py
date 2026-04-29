@@ -392,6 +392,14 @@ class RolloutManager:
                     self._health_monitors.append(monitor)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
 
+        # Multi-policy registry. Empty for single-policy runs (legacy callers
+        # never touch these; legacy `_get_updatable_server`, `get_updatable_engines_and_lock`,
+        # and single-arg `set_train_parallel_config` keep working unchanged).
+        # Populated via `register_policy` from train_multi_policy.py / PolicyRegistry.
+        self._policy_to_server: dict[str, str] = {}
+        self._policy_args: dict[str, "Namespace"] = {}
+        self._policy_train_parallel_config: dict[str, dict] = {}
+
     def _get_metrics_router_addr(self) -> str | None:
         """Return the router address for scraping SGLang engine metrics.
 
@@ -453,6 +461,53 @@ class RolloutManager:
                 return srv
         return None
 
+    def _get_server(self, name: str) -> RolloutServer:
+        """Look up a server by name. Used by multi-policy weight-sync routing.
+
+        Raises ValueError when the name doesn't match any model in SglangConfig.
+        Distinct from `_get_updatable_server` which scans all servers and returns
+        the first updatable one (legacy "first wins" path).
+        """
+        if name not in self.servers:
+            raise ValueError(
+                f"unknown sglang server {name!r}, known: {list(self.servers)}"
+            )
+        return self.servers[name]
+
+    def register_policy(
+        self,
+        policy_name: str,
+        server_name: str,
+        policy_args,
+        train_parallel_config: dict | None = None,
+    ) -> None:
+        """Bind a trainable policy to its 1:1 sglang server. Multi-policy entry point.
+
+        Called once per policy by PolicyRegistry at startup. Stores:
+          - sglang server name (for weight-sync routing in get_engines_and_lock)
+          - per-policy args namespace (read by _split_by_policy / _post_process_rewards
+            for per-policy GRPO group-norm — Step 2)
+          - per-policy train_parallel_config (per-policy dp_size for sample DP partition)
+
+        Enforces the 1:1 invariant: each sglang server has exactly one trainable owner,
+        and the server must have update_weights=True (frozen mirrors are rejected).
+        """
+        if server_name in self._policy_to_server.values():
+            raise ValueError(
+                f"sglang server {server_name!r} already bound to another policy "
+                f"(existing bindings: {self._policy_to_server})"
+            )
+        srv = self._get_server(server_name)
+        if not srv.update_weights:
+            raise ValueError(
+                f"sglang server {server_name!r} has update_weights=false; "
+                f"cannot bind a trainable policy to a frozen mirror"
+            )
+        self._policy_to_server[policy_name] = server_name
+        self._policy_args[policy_name] = policy_args
+        if train_parallel_config is not None:
+            self._policy_train_parallel_config[policy_name] = train_parallel_config
+
     @property
     def rollout_engines(self):
         """All node-0 engines across all servers / models."""
@@ -471,6 +526,36 @@ class RolloutManager:
         gpu_offsets = srv.engine_gpu_offsets if srv else []
         num_new = srv.num_new_engines if srv else 0
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
+
+    def get_engines_and_lock(self, policy_name: str | None = None):
+        """Per-policy version of get_updatable_engines_and_lock.
+
+        policy_name=None → legacy fallback: routes through _get_updatable_server
+        (the existing first-wins path used by single-policy train.py).
+        policy_name="<name>" → routes through _get_server(self._policy_to_server[name]).
+
+        Returns the same 5-tuple shape as get_updatable_engines_and_lock so callers
+        can swap one for the other without changing tuple unpacking.
+        """
+        if policy_name is None:
+            srv = self._get_updatable_server()
+        else:
+            if policy_name not in self._policy_to_server:
+                raise ValueError(
+                    f"policy {policy_name!r} has no registered sglang server; "
+                    f"call register_policy({policy_name!r}, ...) first. "
+                    f"Currently registered: {list(self._policy_to_server)}"
+                )
+            srv = self._get_server(self._policy_to_server[policy_name])
+        if srv is None:
+            return [], self.rollout_engine_lock, 0, [], []
+        return (
+            srv.engines,
+            self.rollout_engine_lock,
+            srv.num_new_engines,
+            srv.engine_gpu_counts,
+            srv.engine_gpu_offsets,
+        )
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -749,8 +834,20 @@ class RolloutManager:
 
         return train_data
 
-    def set_train_parallel_config(self, config: dict):
+    def set_train_parallel_config(self, config: dict, policy_name: str | None = None):
+        """Receive the train-side parallel config (dp_size etc.) so the manager
+        can do the right DP partition in _split_train_data_by_dp.
+
+        Legacy single-policy: callers pass one positional arg → policy_name defaults
+        to None → behavior is bit-for-bit identical (writes self.train_parallel_config
+        and skips the per-policy branch).
+
+        Multi-policy: train_actor passes policy_name=<cfg.name> so the manager can
+        look up each policy's dp_size in _split_by_policy (Step 2).
+        """
         self.train_parallel_config = config
+        if policy_name is not None:
+            self._policy_train_parallel_config[policy_name] = config
 
     def _split_train_data_by_dp(self, data, dp_size):
         """Split the train data by data parallel size."""
