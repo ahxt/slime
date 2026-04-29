@@ -46,8 +46,8 @@ import ray
 from slime.ray.placement_group import (
     create_placement_groups_multi,
     create_rollout_manager_multi,
+    create_training_models_multi,
 )
-from slime.ray.policy_registry import PolicyRegistry
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import (
     configure_logger,
@@ -115,25 +115,20 @@ def train(args):
     update_tracking_open_metrics(args, router_addr)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 4. Build the policy registry — N RayTrainGroups, registered against manager
+    # 4. Build the N RayTrainGroups, register each with the manager, async_init,
+    #    and reconcile start_rollout_ids across policies. Returns a dict of
+    #    PolicyHandles keyed by policy name. Mirrors create_training_models for
+    #    the multi-policy path.
     # ──────────────────────────────────────────────────────────────────────────
-    registry = PolicyRegistry(policy_configs, args, pgs, rollout_manager)
+    handles = create_training_models_multi(args, pgs, rollout_manager, policy_configs)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 5. Init each policy (loads ckpts, builds weight_updater, etc.) and reconcile
-    # ──────────────────────────────────────────────────────────────────────────
-    start_rollout_id = _reconcile_start_rollout_ids(registry, rollout_manager)
-
-    if args.start_rollout_id is None:
-        args.start_rollout_id = start_rollout_id
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # 6. Initial weight push (each actor → its paired engine)
+    # 5. Initial weight push (each actor → its paired engine)
     # ──────────────────────────────────────────────────────────────────────────
     if args.offload_rollout:
         ray.get(rollout_manager.onload_weights.remote())
-    for p in registry.all():
-        p.train_group.update_weights()
+    for h in handles.values():
+        h.train_group.update_weights()
     if args.offload_rollout:
         ray.get(rollout_manager.onload_kv.remote())
 
@@ -142,7 +137,7 @@ def train(args):
         ray.get(rollout_manager.eval.remote(rollout_id=0))
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 7. Train loop
+    # 6. Train loop
     # ──────────────────────────────────────────────────────────────────────────
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         if (
@@ -161,20 +156,20 @@ def train(args):
         # Train each policy independently — no DAG, no external_data (PPO out of scope).
         # Wait for each to finish before starting the next; concurrent train across
         # policies that share GPU slots would conflict.
-        for p in registry.all():
-            data = rollout_data.get(p.config.name) or rollout_data.get("__shared__")
+        for h in handles.values():
+            data = rollout_data.get(h.config.name) or rollout_data.get("__shared__")
             if data is None:
-                logger.warning(f"policy {p.config.name} got no rollout data")
+                logger.warning(f"policy {h.config.name} got no rollout data")
                 continue
-            ray.get(p.train_group.async_train(rollout_id, data))
+            ray.get(h.train_group.async_train(rollout_id, data))
 
         # Save (per-policy checkpoint dirs from PolicyConfig.save)
         if should_run_periodic_action(
             rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
         ):
-            for p in registry.all():
-                if p.config.save:
-                    p.train_group.save_model(
+            for h in handles.values():
+                if h.config.save:
+                    h.train_group.save_model(
                         rollout_id, force_sync=rollout_id == args.num_rollout - 1
                     )
             if args.rollout_global_dataset:
@@ -182,15 +177,15 @@ def train(args):
 
         # Memory hygiene
         if not args.offload_train:
-            for p in registry.all():
-                p.train_group.clear_memory()
+            for h in handles.values():
+                h.train_group.clear_memory()
 
         # Weight update (serialized — sglang engines on shared GPUs cannot accept
         # two simultaneous broadcasts).
         if args.offload_rollout:
             ray.get(rollout_manager.onload_weights.remote())
-        for p in registry.all():
-            p.train_group.update_weights()
+        for h in handles.values():
+            h.train_group.update_weights()
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
 
@@ -199,44 +194,10 @@ def train(args):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
     # ──────────────────────────────────────────────────────────────────────────
-    # 8. Teardown
+    # 7. Teardown
     # ──────────────────────────────────────────────────────────────────────────
     ray.get(rollout_manager.dispose.remote())
     finish_tracking(args)
-
-
-def _reconcile_start_rollout_ids(registry: PolicyRegistry, rollout_manager) -> int:
-    """All policies start fresh at 0, or all resume at the same rollout_id.
-
-    Each policy's async_init returns the per-worker start_rollout_ids for its train
-    group. Within a group they must agree (Megatron's existing within-group assertion).
-    Across policies, divergence triggers a warning and we fall back to the min.
-
-    Also calls set_rollout_manager on each train group so it can post weight updates.
-    """
-    starts: dict[str, int] = {}
-    for p in registry.all():
-        ids = ray.get(
-            p.train_group.async_init(
-                p.args,
-                role=p.config.role,
-                with_ref=p.args.kl_coef != 0 or p.args.use_kl_loss,
-            )
-        )
-        if len(set(ids)) != 1:
-            raise RuntimeError(
-                f"{p.config.name}: workers disagree on start_rollout_id: {ids}"
-            )
-        starts[p.config.name] = ids[0]
-        p.train_group.set_rollout_manager(rollout_manager)
-
-    chosen = min(starts.values())
-    if any(s != chosen for s in starts.values()):
-        logger.warning(
-            f"start_rollout_ids diverged across policies: {starts}; using min={chosen}. "
-            f"User is responsible for ensuring this is intended."
-        )
-    return chosen
 
 
 if __name__ == "__main__":

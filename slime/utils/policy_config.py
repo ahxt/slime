@@ -265,6 +265,19 @@ def derive_cluster_sizing(configs: list[PolicyConfig], colocate: bool) -> tuple[
     return actor_gpus, rollout_gpus, total_gpus
 
 
+@dataclasses.dataclass
+class PolicyHandle:
+    """One trainable Megatron actor + its 1:1-paired sglang engine handle.
+
+    Built by create_training_models_multi (slime.ray.placement_group). The driver
+    iterates a dict[name, PolicyHandle] returned from there.
+    """
+
+    config: "PolicyConfig"
+    args: "Any"  # PolicyConfig projected onto a Namespace for downstream Megatron code
+    train_group: "Any"  # RayTrainGroup
+
+
 def config_to_namespace(cfg: "PolicyConfig", base_args):
     """Project PolicyConfig fields onto a Namespace, copying everything directly.
 
@@ -272,7 +285,7 @@ def config_to_namespace(cfg: "PolicyConfig", base_args):
     Sets policy_name = cfg.name so downstream code (update_weights routing,
     Sample.policy_name tagging) can read it from args.
 
-    Pure function — used by PolicyRegistry to build per-policy Namespaces.
+    Pure function — used by create_training_models_multi to build per-policy Namespaces.
     """
     from argparse import Namespace
     ns = Namespace(**vars(base_args))

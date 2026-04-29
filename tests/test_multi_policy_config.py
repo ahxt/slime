@@ -1001,14 +1001,9 @@ class TestEdgeCases:
 
 class TestPolicyHandleDataclass:
     def test_construct_with_mock_train_group(self):
-        """PolicyHandle is a dataclass; can be constructed without Ray for unit tests."""
-        # Skip if ray is not installed (slime.ray.policy_registry imports ray)
-        import importlib.util
-        if importlib.util.find_spec("ray") is None:
-            pytest.skip("ray not installed; skipping PolicyHandle import")
-
+        """PolicyHandle is a pure dataclass in slime.utils.policy_config — no Ray dep."""
         from argparse import Namespace
-        from slime.ray.policy_registry import PolicyHandle
+        from slime.utils.policy_config import PolicyHandle
         cfg = _minimal_actor()
         ns = Namespace(policy_name="solver", lr=1e-6)
         handle = PolicyHandle(config=cfg, args=ns, train_group=object())

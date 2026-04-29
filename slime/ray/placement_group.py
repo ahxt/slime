@@ -269,6 +269,74 @@ def create_placement_groups_multi(args, policy_configs):
     return result
 
 
+def create_training_models_multi(args, pgs, rollout_manager, policy_configs):
+    """Multi-policy version of create_training_models. Mirrors the legacy
+    function's responsibilities for N independent trainable Megatron actors.
+
+    For each policy:
+      - project PolicyConfig onto a Namespace (config_to_namespace)
+      - allocate the RayTrainGroup
+      - register the policy with rollout_manager (1:1 sglang server binding)
+      - async_init the train group, collect start_rollout_ids
+      - set_rollout_manager so the train group can post weight updates
+
+    Then reconciles start_rollout_ids across policies (min + warning on
+    divergence), sets args.start_rollout_id, and loads any resumed rollout
+    buffer (rollout_global_dataset parity with legacy create_training_models).
+
+    Returns dict[name, PolicyHandle].
+    """
+    from slime.utils.policy_config import PolicyHandle, config_to_namespace
+
+    # ── Build N RayTrainGroups + register each with the rollout manager ──
+    handles: dict[str, PolicyHandle] = {}
+    for cfg in policy_configs:
+        args_p = config_to_namespace(cfg, args)
+        train_group = allocate_train_group(
+            args=args_p,
+            num_nodes=cfg.megatron_num_nodes,
+            num_gpus_per_node=cfg.num_gpus_per_node,
+            pg=pgs[cfg.name],
+            role=cfg.role,
+        )
+        handles[cfg.name] = PolicyHandle(config=cfg, args=args_p, train_group=train_group)
+        ray.get(
+            rollout_manager.register_policy.remote(cfg.name, cfg.sglang_server, args_p)
+        )
+
+    # ── async_init each + reconcile start_rollout_ids across policies ──
+    starts: dict[str, int] = {}
+    for name, h in handles.items():
+        ids = ray.get(
+            h.train_group.async_init(
+                h.args,
+                role=h.config.role,
+                with_ref=h.args.kl_coef != 0 or h.args.use_kl_loss,
+            )
+        )
+        if len(set(ids)) != 1:
+            raise RuntimeError(
+                f"{name}: workers disagree on start_rollout_id: {ids}"
+            )
+        starts[name] = ids[0]
+        h.train_group.set_rollout_manager(rollout_manager)
+
+    chosen = min(starts.values())
+    if any(s != chosen for s in starts.values()):
+        logger.warning(
+            f"start_rollout_ids diverged across policies: {starts}; using min={chosen}. "
+            f"User is responsible for ensuring this is intended."
+        )
+    if args.start_rollout_id is None:
+        args.start_rollout_id = chosen
+
+    # Legacy parity: load resumed rollout buffer when --rollout-global-dataset is set
+    if args.rollout_global_dataset:
+        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+
+    return handles
+
+
 def create_rollout_manager_multi(args, pg, sglang_config):
     """Multi-policy rollout manager. Thin bridge: serializes the per-policy
     SglangConfig back to a temp YAML, sets args.sglang_config to that path, and
@@ -286,9 +354,9 @@ def create_rollout_manager_multi(args, pg, sglang_config):
     consistency check).
 
     Per-policy registration (RolloutManager.register_policy) is NOT done here —
-    that's PolicyRegistry's job (it has the full per-policy Namespace). Calling
-    register_policy here would double-register and trigger the "already bound"
-    check.
+    that's create_training_models_multi's job (it has the full per-policy
+    Namespace). Calling register_policy here would double-register and trigger
+    the "already bound" check.
     """
     import tempfile
 

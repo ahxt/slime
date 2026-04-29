@@ -395,7 +395,7 @@ class RolloutManager:
         # Multi-policy registry. Empty for single-policy runs (legacy callers
         # never touch these; legacy `_get_updatable_server`, `get_updatable_engines_and_lock`,
         # and single-arg `set_train_parallel_config` keep working unchanged).
-        # Populated via `register_policy` from train_multi_policy.py / PolicyRegistry.
+        # Populated via `register_policy` from create_training_models_multi.
         self._policy_to_server: dict[str, str] = {}
         self._policy_args: dict[str, "Namespace"] = {}
         self._policy_train_parallel_config: dict[str, dict] = {}
@@ -483,7 +483,7 @@ class RolloutManager:
     ) -> None:
         """Bind a trainable policy to its 1:1 sglang server. Multi-policy entry point.
 
-        Called once per policy by PolicyRegistry at startup. Stores:
+        Called once per policy by create_training_models_multi at startup. Stores:
           - sglang server name (for weight-sync routing in get_engines_and_lock)
           - per-policy args namespace (read by _split_by_policy / _post_process_rewards
             for per-policy GRPO group-norm — Step 2)
