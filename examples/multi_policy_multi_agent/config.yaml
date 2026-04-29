@@ -1,0 +1,226 @@
+# Multi-policy multi-agent config — single source of truth.
+#
+# Each entry under `policies:`:
+#   name, role                           — identity
+#   hf_checkpoint                        — base model
+#   load, save                           — checkpoint dirs (per-policy)
+#   ref_load                             — KL ref checkpoint (optional)
+#   buffer_mode                          — "split" | "shared". Routes Sample.policy_name.
+#   num_gpus_per_node                    — cluster-level GPU count per node (same for both sides)
+#   megatron_num_nodes                   — Megatron actor placement (world_size = nodes × num_gpus_per_node)
+#   sglang_num_nodes                     — sglang engine placement for this policy's 1:1 engine
+#                                          (sglang_num_nodes × num_gpus_per_node must equal
+#                                           sum(sglang.server_groups[].num_gpus))
+#   megatron:                            — Megatron training (parallel, recompute, batching, optimizer, loss)
+#   sglang:                              — sglang engine deployment (server args, server_groups)
+#
+# 1:1 pairing is implicit: each policy entry owns exactly one sglang block.
+# The policy's `name` is reused as the sglang server name (used by get_model_url
+# and Sample.policy_name).
+#
+# Cluster sizing (derivable from this file):
+#   total_megatron_gpus = sum(policies[i].megatron_num_nodes * num_gpus_per_node)
+#   total_sglang_gpus   = sum(policies[i].sglang_num_nodes   * num_gpus_per_node)
+#   ray_num_gpus = max(total_megatron_gpus, total_sglang_gpus)  # with --colocate
+#                = total_megatron_gpus + total_sglang_gpus       # without --colocate
+
+policies:
+
+  # ─── solver ───────────────────────────────────────────────────────────────
+  - name: solver
+    role: actor
+
+    hf_checkpoint: /root/Qwen3-30B-A3B
+    load: /ckpt/multi_policy_multi_agent/solver
+    save: /ckpt/multi_policy_multi_agent/solver
+    # ref_load: /root/Qwen3-30B-A3B_torch_dist   # uncomment for KL ref
+
+    buffer_mode: split
+
+    num_gpus_per_node: 8
+    megatron_num_nodes: 1
+    sglang_num_nodes: 1
+
+    megatron:
+      tensor_model_parallel_size: 4
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      sequence_parallel: true
+
+      recompute_granularity: full
+      recompute_method: uniform
+      recompute_num_layers: 1
+
+      micro_batch_size: 1
+      global_batch_size: 256
+      use_dynamic_batch_size: true
+      max_tokens_per_gpu: 20480
+
+      optimizer: adam
+      lr: 1.0e-6
+      lr_decay_style: constant
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.98
+      optimizer_cpu_offload: true
+      overlap_cpu_optimizer_d2h_h2d: true
+      use_precision_aware_optimizer: true
+
+      advantage_estimator: grpo
+      n_samples_per_prompt: 8
+      eps_clip: 0.2
+      eps_clip_high: 0.28
+      kl_coef: 0
+      use_kl_loss: true
+      kl_loss_coef: 0
+
+    sglang:
+      update_weights: true
+      num_gpus_per_engine: 8
+      # model_path defaults to top-level hf_checkpoint
+
+      mem_fraction_static: 0.7
+      cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
+      chunked_prefill_size: 8192
+      max_running_requests: 256
+      attention_backend: flash
+      log_level: info
+      # Optional (uncomment to enable):
+      # max_total_tokens: 1048576
+      # enable_metrics: true
+      # speculative_algorithm: null
+      # speculative_num_steps: 0
+      # speculative_eagle_topk: 0
+      # speculative_num_draft_tokens: 0
+
+      server_groups:
+        - worker_type: regular          # regular | prefill | decode | placeholder | encoder
+          num_gpus: 8
+
+  # ─── rewriter ─────────────────────────────────────────────────────────────
+  - name: rewriter
+    role: actor
+
+    hf_checkpoint: /root/Qwen3-30B-A3B
+    load: /ckpt/multi_policy_multi_agent/rewriter
+    save: /ckpt/multi_policy_multi_agent/rewriter
+
+    buffer_mode: split
+
+    num_gpus_per_node: 8
+    megatron_num_nodes: 1
+    sglang_num_nodes: 1
+
+    megatron:
+      tensor_model_parallel_size: 4
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      sequence_parallel: true
+
+      recompute_granularity: full
+      recompute_method: uniform
+      recompute_num_layers: 1
+
+      micro_batch_size: 1
+      global_batch_size: 256
+      use_dynamic_batch_size: true
+      max_tokens_per_gpu: 20480
+
+      optimizer: adam
+      lr: 1.0e-6
+      lr_decay_style: constant
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.98
+      optimizer_cpu_offload: true
+      overlap_cpu_optimizer_d2h_h2d: true
+      use_precision_aware_optimizer: true
+
+      advantage_estimator: grpo
+      n_samples_per_prompt: 8
+      eps_clip: 0.2
+      kl_coef: 0
+      use_kl_loss: true
+      kl_loss_coef: 0
+
+    sglang:
+      update_weights: true
+      num_gpus_per_engine: 8
+
+      mem_fraction_static: 0.7
+      cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
+      chunked_prefill_size: 8192
+      max_running_requests: 256
+      attention_backend: flash
+      log_level: info
+
+      server_groups:
+        - worker_type: regular
+          num_gpus: 8
+
+  # ─── selector ─────────────────────────────────────────────────────────────
+  - name: selector
+    role: actor
+
+    hf_checkpoint: /root/Qwen3-30B-A3B
+    load: /ckpt/multi_policy_multi_agent/selector
+    save: /ckpt/multi_policy_multi_agent/selector
+
+    buffer_mode: split
+
+    num_gpus_per_node: 8
+    megatron_num_nodes: 1
+    sglang_num_nodes: 1
+
+    megatron:
+      tensor_model_parallel_size: 4
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      sequence_parallel: true
+
+      recompute_granularity: full
+      recompute_method: uniform
+      recompute_num_layers: 1
+
+      micro_batch_size: 1
+      global_batch_size: 256
+      use_dynamic_batch_size: true
+      max_tokens_per_gpu: 20480
+
+      optimizer: adam
+      lr: 1.0e-6
+      lr_decay_style: constant
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.98
+      optimizer_cpu_offload: true
+      overlap_cpu_optimizer_d2h_h2d: true
+      use_precision_aware_optimizer: true
+
+      advantage_estimator: grpo
+      n_samples_per_prompt: 8     # N parallel selectors per problem (matches num_parallel)
+      eps_clip: 0.2
+      kl_coef: 0
+      use_kl_loss: true
+      kl_loss_coef: 0
+
+    sglang:
+      update_weights: true
+      num_gpus_per_engine: 8
+
+      mem_fraction_static: 0.7
+      cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
+      chunked_prefill_size: 8192
+      max_running_requests: 256
+      attention_backend: flash
+      log_level: info
+
+      server_groups:
+        - worker_type: regular
+          num_gpus: 8

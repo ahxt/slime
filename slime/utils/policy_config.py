@@ -1,0 +1,314 @@
+"""PolicyConfig dataclass + flat-fields parser for multi-policy training.
+
+Parses examples/<run>/config.yaml of the form:
+
+    policies:
+      - name: solver
+        role: actor
+        hf_checkpoint: ...
+        load: ...
+        save: ...
+        ref_load: ...                   # optional
+        buffer_mode: split | shared
+        num_gpus_per_node: 8
+        megatron_num_nodes: 1
+        sglang_num_nodes: 1
+        megatron:                       # nested: training fields
+          tensor_model_parallel_size: ...
+          ...
+        sglang:                         # nested: engine deployment fields
+          model_path: ...               # defaults to top-level hf_checkpoint
+          server_groups: [...]
+          ...
+
+Parser flattens megatron[*] into top-level PolicyConfig fields, keeps sglang as
+a raw dict (later projected to a SglangConfig.ModelConfig). 1:1 pairing is
+implicit: PolicyConfig.sglang_server defaults to PolicyConfig.name.
+
+Diverges from upstream parse_megatron_role_args (commit f65c6e8): no overrides:
+sub-dict, no silent critic field forcing. Validation only.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import logging
+from typing import Any
+
+import yaml
+
+logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class PolicyConfig:
+    # ── identity ──
+    name: str
+    role: str = "actor"  # only "actor" supported in v1; critic deferred
+
+    # ── model / checkpoint ──
+    hf_checkpoint: str = ""
+    load: str | None = None
+    save: str | None = None
+    ref_load: str | None = None  # KL ref; with_ref=True when kl_coef != 0 or use_kl_loss=True
+
+    # ── Megatron parallel ──
+    tensor_model_parallel_size: int = 1
+    pipeline_model_parallel_size: int = 1
+    context_parallel_size: int = 1
+    expert_model_parallel_size: int = 1
+    expert_tensor_parallel_size: int = 1
+    sequence_parallel: bool = False
+
+    # ── Recompute (memory/compute trade) ──
+    recompute_granularity: str | None = None  # "full" | "selective" | None
+    recompute_method: str | None = None  # "uniform" | "block" | None
+    recompute_num_layers: int | None = None
+
+    # ── Batching ──
+    micro_batch_size: int = 1
+    global_batch_size: int = 64
+    use_dynamic_batch_size: bool = False
+    max_tokens_per_gpu: int | None = None
+
+    # ── Optimizer (per-policy — each actor has its own optimizer state) ──
+    optimizer: str = "adam"
+    lr: float = 1.0e-6
+    lr_decay_style: str = "constant"
+    weight_decay: float = 0.0
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.999
+    optimizer_cpu_offload: bool = False
+    overlap_cpu_optimizer_d2h_h2d: bool = False
+    use_precision_aware_optimizer: bool = False
+
+    # ── Loss / RL hyperparameters ──
+    eps_clip: float = 0.2
+    eps_clip_high: float | None = None
+    kl_coef: float = 0.0
+    kl_loss_coef: float = 0.0
+    kl_loss_type: str = "low_var_kl"
+    use_kl_loss: bool = False
+    custom_advantage_function_path: str | None = None
+    advantage_estimator: str = "grpo"
+    n_samples_per_prompt: int = 1
+    rewards_normalization: bool = True
+    grpo_std_normalization: bool = True
+
+    # ── Multi-policy orchestration ──
+    sglang_server: str | None = None  # 1:1 pairing; defaults to PolicyConfig.name
+    buffer_mode: str = "split"  # "split" | "shared"
+
+    # ── GPU placement (cluster-level num_gpus_per_node, per-side node counts) ──
+    num_gpus_per_node: int = 8
+    megatron_num_nodes: int = 1
+    sglang_num_nodes: int = 1
+
+    # ── sglang sub-block (raw dict, projected to SglangConfig.ModelConfig later) ──
+    sglang: dict | None = None
+
+
+def validate_policy_config(cfg: PolicyConfig) -> None:
+    if cfg.role != "actor":
+        raise ValueError(
+            f"{cfg.name}: only role='actor' supported, got {cfg.role!r} "
+            f"(critic deferred — PPO out of scope)"
+        )
+    if cfg.sglang_server is None:
+        raise ValueError(f"{cfg.name}: actor requires sglang_server (1:1 pairing)")
+    if cfg.buffer_mode not in {"shared", "split"}:
+        raise ValueError(f"{cfg.name}: buffer_mode must be 'shared' or 'split'")
+    if not cfg.hf_checkpoint:
+        raise ValueError(f"{cfg.name}: hf_checkpoint required")
+
+    # Sglang placement consistency
+    if cfg.sglang is not None:
+        sglang_total = cfg.sglang_num_nodes * cfg.num_gpus_per_node
+        groups_total = sum(g["num_gpus"] for g in cfg.sglang.get("server_groups", []))
+        if sglang_total != groups_total:
+            raise ValueError(
+                f"{cfg.name}: sglang_num_nodes × num_gpus_per_node ({sglang_total}) "
+                f"must equal sum of sglang.server_groups[].num_gpus ({groups_total})"
+            )
+
+
+def parse_policy_configs(config_path: str) -> list[PolicyConfig]:
+    """Parse config.yaml into list[PolicyConfig].
+
+    Each policies[i] entry has top-level fields and two nested sub-blocks (megatron, sglang).
+    Parser flattens megatron[*] into PolicyConfig fields; sglang stays as a raw dict
+    (build_sglang_config_from_policies projects it to a SglangConfig later).
+    """
+    with open(config_path) as f:
+        raw = yaml.safe_load(f) or {}
+    if "policies" not in raw or not isinstance(raw["policies"], list):
+        raise ValueError("config must have top-level 'policies' list")
+
+    configs: list[PolicyConfig] = []
+    for entry in raw["policies"]:
+        # sglang.model_path defaults to top-level hf_checkpoint
+        sglang_block = dict(entry.get("sglang") or {})
+        sglang_block.setdefault("model_path", entry.get("hf_checkpoint"))
+
+        flat: dict[str, Any] = {
+            "name": entry["name"],
+            "role": entry.get("role", "actor"),
+            "hf_checkpoint": entry.get("hf_checkpoint", ""),
+            "load": entry.get("load"),
+            "save": entry.get("save"),
+            "ref_load": entry.get("ref_load"),
+            "buffer_mode": entry.get("buffer_mode", "split"),
+            "num_gpus_per_node": entry.get("num_gpus_per_node", 8),
+            "megatron_num_nodes": entry.get("megatron_num_nodes", 1),
+            "sglang_num_nodes": entry.get("sglang_num_nodes", 1),
+            **(entry.get("megatron") or {}),
+            "sglang": sglang_block,
+            "sglang_server": entry["name"],  # 1:1 pairing: server name = policy name
+        }
+        configs.append(PolicyConfig(**flat))
+
+    for cfg in configs:
+        validate_policy_config(cfg)
+    _validate_unique_names(configs)
+    _validate_unique_sglang_servers(configs)
+    _validate_shared_buffer_consistency(configs)
+    return configs
+
+
+def _validate_unique_names(configs: list[PolicyConfig]) -> None:
+    names = [c.name for c in configs]
+    if len(names) != len(set(names)):
+        raise ValueError(f"duplicate policy names: {names}")
+
+
+def _validate_unique_sglang_servers(configs: list[PolicyConfig]) -> None:
+    """1:1 pairing: each engine has exactly one trainable owner."""
+    servers = [c.sglang_server for c in configs]
+    if len(servers) != len(set(servers)):
+        raise ValueError(f"two policies cannot push to the same sglang_server: {servers}")
+
+
+def _validate_shared_buffer_consistency(configs: list[PolicyConfig]) -> None:
+    """Shared-buffer policies must agree on advantage_estimator and n_samples_per_prompt
+    (group-norm depends on these)."""
+    shared = [c for c in configs if c.buffer_mode == "shared"]
+    if len(shared) <= 1:
+        return
+    estimators = {c.advantage_estimator for c in shared}
+    if len(estimators) > 1:
+        raise ValueError(
+            f"shared-buffer policies must agree on advantage_estimator: "
+            f"{ {c.name: c.advantage_estimator for c in shared} }"
+        )
+    nsp = {c.n_samples_per_prompt for c in shared}
+    if len(nsp) > 1:
+        raise ValueError(
+            f"shared-buffer policies must agree on n_samples_per_prompt: "
+            f"{ {c.name: c.n_samples_per_prompt for c in shared} }"
+        )
+
+
+def build_sglang_config_from_policies(configs: list[PolicyConfig]):
+    """Project each policy's sglang sub-block into a SglangConfig.ModelConfig.
+
+    The user-facing sglang sub-block is FLAT (no overrides: indirection).
+    Model-level fields (model_path, num_gpus_per_engine, update_weights, server_groups)
+    map directly onto ModelConfig. All other fields are sglang ServerArgs and get
+    folded into each ServerGroupConfig.overrides for upstream's _compute_server_args.
+    """
+    from slime.backends.sglang_utils.sglang_config import (
+        ModelConfig,
+        ServerGroupConfig,
+        SglangConfig,
+    )
+
+    MODEL_FIELDS = {"model_path", "num_gpus_per_engine", "update_weights", "server_groups"}
+
+    models = []
+    for cfg in configs:
+        if cfg.sglang is None:
+            raise ValueError(f"{cfg.name}: missing 'sglang' sub-block in config")
+        sg = dict(cfg.sglang)
+
+        # Server-args (everything except model-level fields) flow into each group's overrides.
+        server_arg_overrides = {k: v for k, v in sg.items() if k not in MODEL_FIELDS}
+
+        groups = []
+        for g in sg.get("server_groups", []):
+            g = dict(g)
+            # Per-group overrides win over model-level server-args.
+            merged_overrides = {**server_arg_overrides, **g.pop("overrides", {})}
+            groups.append(ServerGroupConfig(**g, overrides=merged_overrides))
+
+        models.append(
+            ModelConfig(
+                name=cfg.name,  # 1:1 pairing: server name = policy name
+                model_path=sg.get("model_path"),
+                num_gpus_per_engine=sg.get("num_gpus_per_engine"),
+                update_weights=sg.get("update_weights", True),
+                server_groups=groups,
+            )
+        )
+    return SglangConfig(models=models)
+
+
+def derive_cluster_sizing(configs: list[PolicyConfig], colocate: bool) -> tuple[int, int, int]:
+    """Compute (actor_gpus, rollout_gpus, total_gpus) from PolicyConfig list.
+
+    Used by:
+      - launcher (to set ray start --num-gpus)
+      - create_placement_groups_multi (to size the global PG)
+    """
+    actor_gpus = sum(c.megatron_num_nodes * c.num_gpus_per_node for c in configs)
+    rollout_gpus = sum(c.sglang_num_nodes * c.num_gpus_per_node for c in configs)
+    total_gpus = max(actor_gpus, rollout_gpus) if colocate else actor_gpus + rollout_gpus
+    return actor_gpus, rollout_gpus, total_gpus
+
+
+def config_to_namespace(cfg: "PolicyConfig", base_args):
+    """Project PolicyConfig fields onto a Namespace, copying everything directly.
+
+    Pulls non-policy globals (rollout cadence, data paths, perf args) from base_args.
+    Sets policy_name = cfg.name so downstream code (update_weights routing,
+    Sample.policy_name tagging) can read it from args.
+
+    Pure function — used by PolicyRegistry to build per-policy Namespaces.
+    """
+    from argparse import Namespace
+    ns = Namespace(**vars(base_args))
+    for f in dataclasses.fields(cfg):
+        setattr(ns, f.name, getattr(cfg, f.name))
+    ns.policy_name = cfg.name
+    return ns
+
+
+def derive_policy_slices(
+    configs: list[PolicyConfig], total_idxs: list[int], colocate: bool
+) -> dict[str, list[int]]:
+    """Carve global placement-group indices into per-policy actor slices + a rollout slice.
+
+    Pure function — no Ray. Mirrors the carving logic of create_placement_groups_multi
+    (Step 7 in plan.md) so it can be unit-tested without a real placement group.
+
+    Returns dict[name, list[int]] where:
+      result[<policy_name>] = idxs assigned to that policy's Megatron actor
+      result["rollout"]     = idxs for the rollout (shared with actors when colocate)
+    """
+    actor_gpus, rollout_gpus, total = derive_cluster_sizing(configs, colocate=colocate)
+    if len(total_idxs) != total:
+        raise ValueError(
+            f"total_idxs has {len(total_idxs)} elements, derive_cluster_sizing wants {total}"
+        )
+
+    cursor = 0
+    result: dict[str, list[int]] = {}
+    for c in configs:
+        ss = c.megatron_num_nodes * c.num_gpus_per_node
+        result[c.name] = list(total_idxs[cursor : cursor + ss])
+        cursor += ss
+
+    if colocate:
+        result["rollout"] = list(total_idxs)
+    else:
+        result["rollout"] = list(total_idxs[cursor:])
+    return result
