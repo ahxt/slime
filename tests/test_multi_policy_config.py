@@ -1010,6 +1010,113 @@ class TestPolicyHandleDataclass:
         assert handle.config.name == "solver"
         assert handle.args.policy_name == "solver"
 
+    def test_three_fields_only(self):
+        """Schema check: PolicyHandle has exactly {config, args, train_group}.
+        Adding/removing fields is a deliberate API change — fail this test on drift."""
+        import dataclasses
+
+        from slime.utils.policy_config import PolicyHandle
+        names = {f.name for f in dataclasses.fields(PolicyHandle)}
+        assert names == {"config", "args", "train_group"}
+
+    def test_mutable_dataclass(self):
+        """PolicyHandle is intentionally mutable — driver code may swap train_group
+        on recovery. Do not flip this to frozen=True without auditing call sites."""
+        from argparse import Namespace
+        from slime.utils.policy_config import PolicyHandle
+        h = PolicyHandle(config=_minimal_actor(), args=Namespace(), train_group="a")
+        h.train_group = "b"  # must not raise
+        assert h.train_group == "b"
+
+    def test_built_from_config_to_namespace(self):
+        """Common-path integration: config_to_namespace(cfg, base) → PolicyHandle.args.
+        Verifies the projection PolicyConfig → Namespace lands the fields the driver
+        relies on (policy_name, hf_checkpoint, role, sglang_server)."""
+        from argparse import Namespace
+        from slime.utils.policy_config import PolicyHandle, config_to_namespace
+        cfg = _minimal_actor()  # name="solver"
+        base = Namespace(kl_coef=0.0, use_kl_loss=False, lr=1e-6)
+        args_p = config_to_namespace(cfg, base)
+        h = PolicyHandle(config=cfg, args=args_p, train_group=object())
+
+        assert h.args.policy_name == "solver"
+        assert h.args.hf_checkpoint == cfg.hf_checkpoint
+        assert h.args.role == "actor"
+        assert h.args.sglang_server == cfg.sglang_server
+        # Globals from base_args still present
+        assert h.args.kl_coef == 0.0
+        assert h.args.lr == 1e-6
+
+    def test_per_policy_namespaces_are_independent(self):
+        """Two PolicyHandles built from the same base_args have independent
+        namespaces — mutating one's args must not affect the other (essential
+        for SPIRAL-style runs where each policy needs its own loss_type, lr, etc.)."""
+        from argparse import Namespace
+        from slime.utils.policy_config import config_to_namespace
+
+        cfg_a = _minimal_actor()
+        cfg_b = dataclasses.replace(_minimal_actor(), name="rewriter", sglang_server="rewriter")
+        base = Namespace(kl_coef=0.0, lr=1e-6)
+
+        ns_a = config_to_namespace(cfg_a, base)
+        ns_b = config_to_namespace(cfg_b, base)
+
+        ns_a.lr = 2e-6
+        assert ns_b.lr == 1e-6  # not mutated by ns_a write
+        assert base.lr == 1e-6  # base also not mutated
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# config_to_namespace projection — covered separately because it's the bridge
+# between PolicyConfig and the per-policy Namespace the driver hands to Ray
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class TestConfigToNamespaceProjection:
+    def test_global_fields_inherited_from_base(self):
+        from argparse import Namespace
+        from slime.utils.policy_config import config_to_namespace
+        base = Namespace(num_rollout=10, save_interval=5, custom_path="/x")
+        ns = config_to_namespace(_minimal_actor(), base)
+        assert ns.num_rollout == 10
+        assert ns.save_interval == 5
+        assert ns.custom_path == "/x"
+
+    def test_policy_fields_overlay_global(self):
+        """When a name collides between global args and PolicyConfig, the policy
+        field wins (e.g. global hf_checkpoint default replaced by per-policy)."""
+        from argparse import Namespace
+        from slime.utils.policy_config import config_to_namespace
+        base = Namespace(hf_checkpoint="/global/path")
+        cfg = _minimal_actor()  # cfg.hf_checkpoint != "/global/path"
+        ns = config_to_namespace(cfg, base)
+        assert ns.hf_checkpoint == cfg.hf_checkpoint
+        assert ns.hf_checkpoint != "/global/path"
+
+    def test_policy_name_set_from_cfg_name(self):
+        """policy_name is appended even though it's not a PolicyConfig field —
+        downstream Megatron code reads args.policy_name for weight-update routing."""
+        from argparse import Namespace
+        from slime.utils.policy_config import config_to_namespace
+        ns = config_to_namespace(_minimal_actor(), Namespace())
+        assert ns.policy_name == "solver"
+
+    def test_does_not_mutate_base_args(self):
+        from argparse import Namespace
+        from slime.utils.policy_config import config_to_namespace
+        base = Namespace(hf_checkpoint="/global", kl_coef=0.5)
+        original = vars(base).copy()
+        _ = config_to_namespace(_minimal_actor(), base)
+        assert vars(base) == original
+
+    def test_does_not_mutate_cfg(self):
+        from argparse import Namespace
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor()
+        before = dataclasses.asdict(cfg)
+        _ = config_to_namespace(cfg, Namespace())
+        assert dataclasses.asdict(cfg) == before
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

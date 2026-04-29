@@ -305,6 +305,8 @@ def create_training_models_multi(args, pgs, rollout_manager, policy_configs):
         )
 
     # ── async_init each + reconcile start_rollout_ids across policies ──
+    # async_init kwargs mirror legacy create_training_models so OPD-megatron
+    # and ref-model toggles work per-policy via PolicyConfig.overrides.
     starts: dict[str, int] = {}
     for name, h in handles.items():
         ids = ray.get(
@@ -312,6 +314,8 @@ def create_training_models_multi(args, pgs, rollout_manager, policy_configs):
                 h.args,
                 role=h.config.role,
                 with_ref=h.args.kl_coef != 0 or h.args.use_kl_loss,
+                with_opd_teacher=getattr(h.args, "use_opd", False)
+                and getattr(h.args, "opd_type", None) == "megatron",
             )
         )
         if len(set(ids)) != 1:
