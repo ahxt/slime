@@ -201,3 +201,89 @@ def create_rollout_manager(args, pg):
         ray.get(rollout_manager.offload.remote())
 
     return rollout_manager, num_rollout_per_epoch
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Multi-policy additions (Step 7 — multi-actor placement groups)
+#
+# Pure additions — the existing create_placement_groups / create_rollout_manager
+# above are unchanged. The legacy single-policy train.py path stays bit-for-bit
+# identical.
+#
+# create_rollout_manager_multi is a stub that points at Step 4 (RolloutManager
+# changes) where the real implementation lands. Step 7 ships placement groups
+# only.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def create_placement_groups_multi(args, policy_configs):
+    """Carve a single global placement group into per-policy actor slices + a
+    rollout slice. Pure additive entry point used by train_multi_policy.py.
+
+    Cluster sizes derived from policy_configs (config.yaml):
+      actor_gpus   = sum(c.megatron_num_nodes * c.num_gpus_per_node for c in cfgs)
+      rollout_gpus = sum(c.sglang_num_nodes   * c.num_gpus_per_node for c in cfgs)
+      total = max(actor_gpus, rollout_gpus)  if args.colocate
+            = actor_gpus + rollout_gpus      otherwise
+
+    Returns dict keyed by policy name + "rollout":
+      result["<policy_name>"] = (pg, bundle_indices, gpu_ids)  for that policy's actor
+      result["rollout"]       = (pg, bundle_indices, gpu_ids)  for sglang engines
+
+    With --colocate, the rollout slice is the entire pool (sglang shares GPUs
+    with actors via fractional Ray resources). Without --colocate, rollout gets
+    the contiguous range right after the last actor slice.
+    """
+    actor_gpus = sum(c.megatron_num_nodes * c.num_gpus_per_node for c in policy_configs)
+    rollout_gpus = sum(c.sglang_num_nodes * c.num_gpus_per_node for c in policy_configs)
+
+    if args.colocate:
+        total = max(actor_gpus, rollout_gpus)
+    else:
+        total = actor_gpus + rollout_gpus
+
+    logger.info(
+        f"create_placement_groups_multi: {len(policy_configs)} policies, "
+        f"actor_gpus={actor_gpus}, rollout_gpus={rollout_gpus}, "
+        f"total={total}, colocate={args.colocate}"
+    )
+
+    pg, idxs, gpus = _create_placement_group(total)
+
+    cursor = 0
+    result: dict[str, tuple] = {}
+    for c in policy_configs:
+        ss = c.megatron_num_nodes * c.num_gpus_per_node
+        result[c.name] = (
+            pg,
+            list(idxs[cursor : cursor + ss]),
+            list(gpus[cursor : cursor + ss]),
+        )
+        cursor += ss
+
+    if args.colocate:
+        result["rollout"] = (pg, list(idxs), list(gpus))
+    else:
+        result["rollout"] = (pg, list(idxs[cursor:]), list(gpus[cursor:]))
+
+    return result
+
+
+def create_rollout_manager_multi(args, pg, sglang_config):
+    """Multi-policy rollout manager — STUB until Step 4 lands.
+
+    The real implementation requires modifications to RolloutManager:
+      - RolloutManager.register_policy(name, server_name, args)
+      - RolloutManager._get_server(name)
+      - RolloutManager.get_engines_and_lock(policy_name=...)
+      - per-policy buffer split (Step 2)
+
+    Step 7 only ships the placement-group side. Calling this raises so callers
+    fail fast with a clear pointer to Step 4. Run via the legacy train.py for
+    single-policy in the meantime.
+    """
+    raise NotImplementedError(
+        "create_rollout_manager_multi requires Step 4 (RolloutManager per-policy "
+        "registration + name-based engine routing). Step 7 only ships placement "
+        "groups. See plan.md for status. Use train.py for single-policy runs."
+    )
