@@ -455,20 +455,28 @@ def log_rollout_data(
                 raise ValueError(f"Unsupported type: {type(val)} for key: {key}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
-        reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
+        metric_name = "rollout"
+        if policy_name := getattr(args, "policy_name", None):
+            metric_name = f"rollout/{policy_name}"
+
+        reduced_log_dict = gather_log_data(metric_name, args, rollout_id, log_dict)
         if args.ci_test and reduced_log_dict is not None:
+            metric_prefix = f"{metric_name}/"
             if (
                 rollout_id == 0
-                and "rollout/log_probs" in reduced_log_dict
-                and "rollout/ref_log_probs" in reduced_log_dict
+                and f"{metric_prefix}log_probs" in reduced_log_dict
+                and f"{metric_prefix}ref_log_probs" in reduced_log_dict
             ):
                 # TODO: figure out why there is a small numerical difference in log_probs and ref_log_probs in CI test, and whether it's expected or not.
                 # assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
-                assert abs(reduced_log_dict["rollout/log_probs"] - reduced_log_dict["rollout/ref_log_probs"]) < 1e-8
-            if "rollout/log_probs" in reduced_log_dict:
-                assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
-            if "rollout/entropy" in reduced_log_dict:
-                assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
+                assert (
+                    abs(reduced_log_dict[f"{metric_prefix}log_probs"] - reduced_log_dict[f"{metric_prefix}ref_log_probs"])
+                    < 1e-8
+                )
+            if f"{metric_prefix}log_probs" in reduced_log_dict:
+                assert -0.5 < reduced_log_dict[f"{metric_prefix}log_probs"] < 0
+            if f"{metric_prefix}entropy" in reduced_log_dict:
+                assert 0 < reduced_log_dict[f"{metric_prefix}entropy"] < 0.5
 
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args, rollout_data)

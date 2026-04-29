@@ -699,7 +699,8 @@ def train(
         ):
             accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
             role = getattr(model[0], "role", "actor")
-            role_tag = "" if role == "actor" else f"{role}-"
+            policy_name = getattr(args, "policy_name", None)
+            role_tag = f"{policy_name}/" if policy_name else ("" if role == "actor" else f"{role}-")
             log_dict = {
                 f"train/{role_tag}{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
                 for key, val in loss_dict.items()
