@@ -42,7 +42,7 @@ def generate_select_template(num_solutions: int) -> str:
     solutions_text = "\n".join(solution_sections)
 
     return f"""You will be given a challenging math problem followed by {num_solutions} solutions.
-Your task is to systematically analyze these solutions to identify the most mathematically sound approach. 
+Your task is to systematically analyze these solutions to identify the most mathematically sound approach.
 
 You are provided with two documents:
 1.  The problem you need to solve.

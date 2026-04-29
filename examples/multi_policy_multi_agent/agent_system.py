@@ -21,7 +21,7 @@ async def generate_response(args, prompt, key):
 
         # Multi-policy: route to the sglang engine paired with this role.
         # `key` ∈ {"solver", "rewriter", "selector"} matches a name in --sglang-config.
-        url = f"{get_model_url(args, key)}/generate"
+        url = get_model_url(args, key)
 
         sample.prompt = prompt
         prompt_token_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]

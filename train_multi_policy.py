@@ -65,6 +65,37 @@ from slime.utils.policy_config import (
 logger = logging.getLogger(__name__)
 
 
+def _set_multi_policy_global_defaults(args, policy_configs, actor_gpus: int, rollout_gpus: int) -> None:
+    """Populate legacy global args that shared rollout code still reads.
+
+    Per-policy Megatron actors get their own namespaces later. These globals are
+    for the single RolloutManager/data-source side.
+    """
+    if not policy_configs:
+        raise ValueError("multi-policy config must contain at least one policy")
+
+    if args.hf_checkpoint is None:
+        args.hf_checkpoint = policy_configs[0].hf_checkpoint
+
+    num_gpus_per_node_values = {cfg.num_gpus_per_node for cfg in policy_configs}
+    if len(num_gpus_per_node_values) != 1:
+        raise ValueError(
+            "all policies must use the same num_gpus_per_node in v1; got "
+            f"{sorted(num_gpus_per_node_values)}"
+        )
+    num_gpus_per_node = policy_configs[0].num_gpus_per_node
+
+    args.rollout_num_gpus = rollout_gpus
+    args.megatron_total_gpus = actor_gpus
+    args.num_gpus_per_node = num_gpus_per_node
+    if actor_gpus % num_gpus_per_node == 0:
+        args.actor_num_nodes = actor_gpus // num_gpus_per_node
+        args.actor_num_gpus_per_node = num_gpus_per_node
+    else:
+        args.actor_num_nodes = 1
+        args.actor_num_gpus_per_node = actor_gpus
+
+
 def train(args):
     configure_logger()
 
@@ -91,7 +122,7 @@ def train(args):
     actor_gpus, rollout_gpus, total_gpus = derive_cluster_sizing(
         policy_configs, colocate=args.colocate
     )
-    args.rollout_num_gpus = rollout_gpus
+    _set_multi_policy_global_defaults(args, policy_configs, actor_gpus, rollout_gpus)
     logger.info(
         f"cluster sizing (colocate={args.colocate}): "
         f"actor_gpus={actor_gpus}, rollout_gpus={rollout_gpus}, total={total_gpus}"

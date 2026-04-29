@@ -1395,6 +1395,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             default=None,
             help="Path to the YAML config for custom function arguments.",
         )
+        reset_arg(
+            parser,
+            "--config",
+            type=str,
+            default=None,
+            help="Path to the multi-policy YAML config consumed by train_multi_policy.py.",
+        )
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
 
         return parser

@@ -291,6 +291,10 @@ def config_to_namespace(cfg: "PolicyConfig", base_args):
     ns = Namespace(**vars(base_args))
     for f in dataclasses.fields(cfg):
         setattr(ns, f.name, getattr(cfg, f.name))
+    ns.actor_num_nodes = cfg.megatron_num_nodes
+    ns.actor_num_gpus_per_node = cfg.num_gpus_per_node
+    ns.num_gpus_per_node = cfg.num_gpus_per_node
+    ns.world_size = cfg.megatron_num_nodes * cfg.num_gpus_per_node
     ns.policy_name = cfg.name
     return ns
 

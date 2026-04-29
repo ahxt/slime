@@ -774,6 +774,7 @@ class TestLauncherConsistency:
         _REPO_ROOT, "examples", "multi_policy_multi_agent",
         "run-qwen3-30B-A3B-multi-policy-multi-agent.sh",
     )
+    ARGUMENTS_PATH = os.path.join(_REPO_ROOT, "slime", "utils", "arguments.py")
 
     def test_launcher_num_gpus_matches_derived(self):
         """The launcher's NUM_GPUS must equal derive_cluster_sizing(colocate=True)
@@ -807,6 +808,12 @@ class TestLauncherConsistency:
         assert "--config" in launcher
         assert "config.yaml" in launcher
 
+    def test_arguments_registers_config_flag(self):
+        with open(self.ARGUMENTS_PATH) as f:
+            src = f.read()
+        assert '"--config"' in src
+        assert "train_multi_policy.py" in src
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Static checks on the example's Python source (regression for bug fixes)
@@ -833,7 +840,8 @@ class TestExampleSourceStatic:
         single hardcoded sglang_router_ip:port."""
         with open(self.AGENT_SYSTEM) as f:
             src = f.read()
-        assert "get_model_url(args, key)" in src
+        assert "url = get_model_url(args, key)" in src
+        assert "get_model_url(args, key)}/generate" not in src
         # The single-router hardcode must be gone
         assert "sglang_router_ip" not in src
         assert "sglang_router_port" not in src
@@ -903,6 +911,33 @@ class TestExampleSourceStatic:
         with open(self.ROLLOUT_FN) as f:
             src = f.read()
         assert "examples.multi_policy_multi_agent.agent_system.run_agent_system" in src
+
+
+class TestMultiPolicyWiringStatic:
+    TRAIN_MULTI = os.path.join(_REPO_ROOT, "train_multi_policy.py")
+    ROLLOUT = os.path.join(_REPO_ROOT, "slime", "ray", "rollout.py")
+    TRAIN_ACTOR = os.path.join(_REPO_ROOT, "slime", "ray", "train_actor.py")
+
+    def test_driver_sets_global_hf_checkpoint_from_policy_config(self):
+        with open(self.TRAIN_MULTI) as f:
+            src = f.read()
+        assert "args.hf_checkpoint = policy_configs[0].hf_checkpoint" in src
+
+    def test_driver_sets_megatron_total_gpus(self):
+        with open(self.TRAIN_MULTI) as f:
+            src = f.read()
+        assert "args.megatron_total_gpus = actor_gpus" in src
+
+    def test_rollout_helpers_prefer_megatron_total_gpus(self):
+        with open(self.ROLLOUT) as f:
+            src = f.read()
+        assert 'getattr(args, "megatron_total_gpus", None)' in src
+
+    def test_train_actor_passes_policy_name_to_parallel_config_registration(self):
+        with open(self.TRAIN_ACTOR) as f:
+            src = f.read()
+        assert 'policy_name = getattr(self.args, "policy_name", None)' in src
+        assert "policy_name=policy_name" in src
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1100,6 +1135,19 @@ class TestConfigToNamespaceProjection:
         from slime.utils.policy_config import config_to_namespace
         ns = config_to_namespace(_minimal_actor(), Namespace())
         assert ns.policy_name == "solver"
+
+    def test_legacy_actor_sizing_aliases_are_policy_specific(self):
+        """Existing Megatron/update-weight code still reads actor_num_* fields.
+        The per-policy namespace must not inherit stale global sizing."""
+        from argparse import Namespace
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(megatron_num_nodes=2, num_gpus_per_node=4)
+        base = Namespace(actor_num_nodes=99, actor_num_gpus_per_node=99, num_gpus_per_node=99, world_size=99)
+        ns = config_to_namespace(cfg, base)
+        assert ns.actor_num_nodes == 2
+        assert ns.actor_num_gpus_per_node == 4
+        assert ns.num_gpus_per_node == 4
+        assert ns.world_size == 8
 
     def test_does_not_mutate_base_args(self):
         from argparse import Namespace

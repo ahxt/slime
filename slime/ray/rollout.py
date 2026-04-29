@@ -1125,6 +1125,8 @@ def _compute_rollout_offset(args) -> int:
     """Offset (in PG bundle slots) where rollout GPUs start."""
     if args.debug_train_only or args.debug_rollout_only or args.colocate:
         return 0
+    if getattr(args, "megatron_total_gpus", None) is not None:
+        return args.megatron_total_gpus
     offset = args.actor_num_nodes * args.actor_num_gpus_per_node
     return offset
 
@@ -1133,6 +1135,8 @@ def _compute_megatron_num_gpus(args) -> int:
     """Total number of megatron (actor + critic) GPU slots in the placement group."""
     if args.debug_rollout_only:
         return 0
+    if getattr(args, "megatron_total_gpus", None) is not None:
+        return args.megatron_total_gpus
     num = args.actor_num_nodes * args.actor_num_gpus_per_node
     return num
 

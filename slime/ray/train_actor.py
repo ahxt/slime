@@ -125,4 +125,10 @@ class TrainRayActor(RayActor):
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
         if not self.args.debug_rollout_only and self.args.rank == 0:
-            ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))
+            policy_name = getattr(self.args, "policy_name", None)
+            ray.get(
+                self.rollout_manager.set_train_parallel_config.remote(
+                    self.train_parallel_config,
+                    policy_name=policy_name,
+                )
+            )
