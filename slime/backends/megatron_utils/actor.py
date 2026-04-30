@@ -54,14 +54,30 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
-        # Reconfigure the logger to include the policy name in every log line.
-        # TrainRayActor.__init__ already called configure_logger() with no prefix
-        # before args were available; reconfigure here so multi-policy runs can
-        # tell solver/rewriter/selector logs apart at a glance.
+        # Tag every Python log record from this actor with the policy name + role.
+        # Two layers (belt-and-suspenders):
+        #   1. Reconfigure the slime root logger format so the prefix appears
+        #      inside the [asctime …] block.
+        #   2. Attach a logging.Filter that prepends "[policy:role] " to
+        #      record.msg directly — works regardless of who calls
+        #      logging.basicConfig() after us (Megatron, etc.).
         policy_name = getattr(args, "policy_name", None)
         if policy_name:
+            tag = f"{policy_name}:{role}"
             from slime.utils.logging_utils import configure_logger as _reconf
-            _reconf(prefix=f" {policy_name}:{role}", force=True)
+            _reconf(prefix=f" {tag}", force=True)
+
+            class _PolicyTagFilter(logging.Filter):
+                def filter(self_, record):
+                    if not getattr(record, "_policy_tagged", False):
+                        record.msg = f"[{tag}] {record.msg}"
+                        record._policy_tagged = True
+                    return True
+
+            root = logging.getLogger()
+            # Avoid stacking filters if init runs more than once
+            root.filters = [f for f in root.filters if not isinstance(f, _PolicyTagFilter)]
+            root.addFilter(_PolicyTagFilter())
 
         monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
