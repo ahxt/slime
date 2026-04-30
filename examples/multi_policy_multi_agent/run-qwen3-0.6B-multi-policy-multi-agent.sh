@@ -52,12 +52,13 @@ ROLLOUT_ARGS=(
 
 # Cluster sizing — derived from config.yaml:
 #   actor_gpus   = sum(policies[i].megatron_num_nodes * num_gpus_per_node)
-#                = 3 × 1 × 2 = 6
+#                = 3 × 1 × 1 = 3
 #   rollout_gpus = sum(policies[i].sglang_num_nodes   * num_gpus_per_node)
-#                = 3 × 1 × 2 = 6
-#   total (colocate) = max(actor_gpus, rollout_gpus) = 6
-#   total (separate) = actor_gpus + rollout_gpus     = 12
-NUM_GPUS=6
+#                = 3 × 1 × 1 = 3
+#   total (colocate) = max(actor_gpus, rollout_gpus) = 3
+#   total (separate) = actor_gpus + rollout_gpus     = 6
+# 4-L40S box has 1 GPU spare with NUM_GPUS=3.
+NUM_GPUS=3
 
 TRAIN_ARGS=(
    --config "${SCRIPT_DIR}/config.yaml"
