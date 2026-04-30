@@ -523,6 +523,13 @@ def _compute_server_args(
     node_rank = rank % nnodes
     base = base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank)
     base = _to_local_gpu_id(base)
+    # Diagnostic: print colocate-related flags so we can verify --colocate
+    # is reaching sglang (rather than guessing from indirect symptoms).
+    logger.info(
+        f"[sglang init rank={rank}] colocate={getattr(args, 'colocate', None)} "
+        f"offload_rollout={getattr(args, 'offload_rollout', None)} "
+        f"→ enable_memory_saver={args.offload_rollout}"
+    )
     kwargs = {
         "model_path": args.hf_checkpoint,
         "trust_remote_code": True,
