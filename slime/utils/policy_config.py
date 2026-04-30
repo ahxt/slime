@@ -311,31 +311,31 @@ def config_to_namespace(cfg: "PolicyConfig", base_args):
             ns.tokenizer_type = "HuggingFaceTokenizer"
 
     # Per-policy weight-load fallback. slime_validate_args runs this once at
-    # parse_args time against global args.{load, megatron_to_hf_mode,
-    # hf_checkpoint}, but those globals don't reflect per-policy values
-    # (megatron_to_hf_mode lives in each policy's megatron block). Replicate
-    # the same logic on the per-policy ns so each Megatron actor lands at
-    # initialize_model_and_optimizer with a usable args.load.
+    # parse_args time against global args.{load, megatron_to_hf_mode}, but
+    # those globals don't reflect per-policy values (megatron_to_hf_mode lives
+    # in each policy's megatron block). Replicate the same logic on the
+    # per-policy ns so each Megatron actor lands at initialize_model_and_optimizer
+    # with a usable args.load.
+    #
+    # Convention: weights are loaded from a *local Megatron torch_dist
+    # checkpoint*. Pre-convert HF→Megatron once with convert_hf_to_torch_dist.py
+    # and point ref_load at the result. We deliberately do NOT fall back to
+    # cfg.hf_checkpoint here — load_checkpoint asserts the path exists locally
+    # and a hub repo id won't satisfy that.
     import os
+    is_megatron_ckpt = (
+        ns.load is not None
+        and os.path.exists(ns.load)
+        and os.path.exists(os.path.join(ns.load, "latest_checkpointed_iteration.txt"))
+    )
     if getattr(ns, "megatron_to_hf_mode", "raw") == "bridge":
-        is_megatron_ckpt = (
-            ns.load is not None
-            and os.path.exists(ns.load)
-            and os.path.exists(os.path.join(ns.load, "latest_checkpointed_iteration.txt"))
-        )
         if not is_megatron_ckpt:
             if ns.load is None:
-                # mbridge can load directly from a HF checkpoint dir/name.
-                ns.load = getattr(ns, "ref_load", None) or cfg.hf_checkpoint
+                ns.load = getattr(ns, "ref_load", None)
             ns.start_rollout_id = 0
     else:
-        # raw mode: if `load` doesn't point at a real Megatron torch_dist ckpt,
-        # fall through to the same finetune-from-ref path slime uses globally.
-        is_megatron_ckpt = (
-            ns.load is not None
-            and os.path.exists(ns.load)
-            and os.path.exists(os.path.join(ns.load, "latest_checkpointed_iteration.txt"))
-        )
+        # raw mode: fall through to the same finetune-from-ref path slime uses
+        # globally when `load` doesn't point at a real Megatron torch_dist ckpt.
         if not is_megatron_ckpt:
             ns.no_load_optim = True
             ns.no_load_rng = True
