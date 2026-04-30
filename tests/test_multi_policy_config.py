@@ -1181,17 +1181,15 @@ class TestWeightLoadFallback:
         defaults.update(overrides)
         return Namespace(**defaults)
 
-    def test_bridge_with_load_none_and_no_ref_load_stays_none(self):
-        """When load and ref_load are both unset, do NOT fall back to
-        cfg.hf_checkpoint (that's a HF Hub repo id; load_checkpoint requires a
-        local Megatron torch_dist directory). Caller is expected to set
-        ref_load to a pre-converted local checkpoint."""
+    def test_bridge_with_load_none_falls_back_to_hf_checkpoint(self):
+        """Mirrors upstream slime_validate_args: bridge mode + load None +
+        ref_load None → ns.load = cfg.hf_checkpoint. mbridge then resolves
+        the hub id at AutoBridge.from_hf_pretrained time."""
         from slime.utils.policy_config import config_to_namespace
         cfg = _minimal_actor(megatron_to_hf_mode="bridge", load=None, ref_load=None,
                              hf_checkpoint="Qwen/Qwen3-0.6B")
         ns = config_to_namespace(cfg, self._ns())
-        # hf_checkpoint is NOT used as a load fallback
-        assert ns.load is None
+        assert ns.load == "Qwen/Qwen3-0.6B"
         assert ns.start_rollout_id == 0
 
     def test_bridge_with_real_megatron_ckpt_keeps_load(self, tmp_path):

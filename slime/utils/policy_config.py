@@ -310,38 +310,41 @@ def config_to_namespace(cfg: "PolicyConfig", base_args):
         if not getattr(ns, "tokenizer_type", None):
             ns.tokenizer_type = "HuggingFaceTokenizer"
 
-    # Per-policy weight-load fallback. slime_validate_args runs this once at
-    # parse_args time against global args.{load, megatron_to_hf_mode}, but
-    # those globals don't reflect per-policy values (megatron_to_hf_mode lives
-    # in each policy's megatron block). Replicate the same logic on the
-    # per-policy ns so each Megatron actor lands at initialize_model_and_optimizer
-    # with a usable args.load.
-    #
-    # Convention: weights are loaded from a *local Megatron torch_dist
-    # checkpoint*. Pre-convert HF→Megatron once with convert_hf_to_torch_dist.py
-    # and point ref_load at the result. We deliberately do NOT fall back to
-    # cfg.hf_checkpoint here — load_checkpoint asserts the path exists locally
-    # and a hub repo id won't satisfy that.
+    # Re-run slime_validate_args' load resolution per policy. Upstream slime
+    # runs this once at parse_args time against the GLOBAL args namespace, but
+    # the globals don't see per-policy values (megatron_to_hf_mode / ref_load /
+    # load all live in each policy's YAML entry). So we apply the exact same
+    # logic — character-for-character — to the per-policy ns. No multi-policy-
+    # specific shortcuts: behavior matches upstream when run with a single
+    # policy, and each per-policy actor lands at the same args state it would
+    # have reached through legacy CLI flags.
     import os
-    is_megatron_ckpt = (
-        ns.load is not None
-        and os.path.exists(ns.load)
-        and os.path.exists(os.path.join(ns.load, "latest_checkpointed_iteration.txt"))
-    )
-    if getattr(ns, "megatron_to_hf_mode", "raw") == "bridge":
-        if not is_megatron_ckpt:
+    if ns.megatron_to_hf_mode == "bridge":
+        if (
+            ns.load is not None
+            and os.path.exists(ns.load)
+            and os.path.exists(os.path.join(ns.load, "latest_checkpointed_iteration.txt"))
+        ):
+            # Megatron torch_dist ckpt at ns.load → resume from it; mbridge
+            # only used in model_provider for the architecture spec.
+            pass
+        else:
             if ns.load is None:
-                ns.load = getattr(ns, "ref_load", None)
+                ns.load = ns.ref_load or cfg.hf_checkpoint
+            # HF/bridge load → start at rollout 0
             ns.start_rollout_id = 0
     else:
-        # raw mode: fall through to the same finetune-from-ref path slime uses
-        # globally when `load` doesn't point at a real Megatron torch_dist ckpt.
-        if not is_megatron_ckpt:
+        if (
+            ns.load is None
+            or not os.path.exists(ns.load)
+            or not os.path.exists(os.path.join(ns.load, "latest_checkpointed_iteration.txt"))
+        ):
             ns.no_load_optim = True
             ns.no_load_rng = True
             ns.finetune = True
-            if ns.load is None:
-                ns.load = getattr(ns, "ref_load", None)
+            ns.load = ns.ref_load
+            if getattr(ns, "ref_ckpt_step", None) is not None:
+                ns.ckpt_step = ns.ref_ckpt_step
             ns.start_rollout_id = 0
     return ns
 
