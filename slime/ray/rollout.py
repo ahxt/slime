@@ -192,12 +192,26 @@ class ServerGroup:
     def offload(self):
         """Fire release_memory_occupation on all engines (non-blocking).
 
-        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        Explicitly tags weights + KV cache + cuda graphs so sglang frees ALL
+        GPU memory pools before Megatron wakes up. Without explicit tags some
+        sglang versions only release the KV pool, leaving model weights
+        resident → colocate-mode OOM during the train forward pass.
+
+        Returns a list of Ray ObjectRefs. Skipped for groups that do not
         overlap with megatron GPUs (``needs_offload=False``).
         """
         if not self.needs_offload:
             return []
-        return [engine.release_memory_occupation.remote() for engine in self.engines if engine is not None]
+        all_tags = [
+            GPU_MEMORY_TYPE_WEIGHTS,
+            GPU_MEMORY_TYPE_KV_CACHE,
+            GPU_MEMORY_TYPE_CUDA_GRAPH,
+        ]
+        return [
+            engine.release_memory_occupation.remote(tags=all_tags)
+            for engine in self.engines
+            if engine is not None
+        ]
 
     def onload(self, tags: list[str] | None = None):
         """Fire resume_memory_occupation on all engines (non-blocking).
