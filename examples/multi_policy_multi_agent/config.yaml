@@ -82,7 +82,7 @@ policies:
       num_gpus_per_engine: 1
       # model_path defaults to top-level hf_checkpoint
 
-      mem_fraction_static: 0.7
+      mem_fraction_static: 0.5
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 32
@@ -151,7 +151,7 @@ policies:
       update_weights: true
       num_gpus_per_engine: 1
 
-      mem_fraction_static: 0.7
+      mem_fraction_static: 0.5
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 32
@@ -213,7 +213,7 @@ policies:
       update_weights: true
       num_gpus_per_engine: 1
 
-      mem_fraction_static: 0.7
+      mem_fraction_static: 0.5
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 32
