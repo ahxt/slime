@@ -47,7 +47,7 @@ policies:
       context_parallel_size: 1
       expert_model_parallel_size: 1
       expert_tensor_parallel_size: 1
-      sequence_parallel: true
+
 
       recompute_granularity: full
       recompute_method: uniform
@@ -118,7 +118,6 @@ policies:
       context_parallel_size: 1
       expert_model_parallel_size: 1
       expert_tensor_parallel_size: 1
-      sequence_parallel: true
 
       recompute_granularity: full
       recompute_method: uniform
@@ -180,7 +179,6 @@ policies:
       context_parallel_size: 1
       expert_model_parallel_size: 1
       expert_tensor_parallel_size: 1
-      sequence_parallel: true
 
       recompute_granularity: full
       recompute_method: uniform
