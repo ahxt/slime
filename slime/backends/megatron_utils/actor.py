@@ -54,30 +54,10 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
-        # Tag every Python log record from this actor with the policy name + role.
-        # Two layers (belt-and-suspenders):
-        #   1. Reconfigure the slime root logger format so the prefix appears
-        #      inside the [asctime …] block.
-        #   2. Attach a logging.Filter that prepends "[policy:role] " to
-        #      record.msg directly — works regardless of who calls
-        #      logging.basicConfig() after us (Megatron, etc.).
-        policy_name = getattr(args, "policy_name", None)
-        if policy_name:
-            tag = f"{policy_name}:{role}"
-            from slime.utils.logging_utils import configure_logger as _reconf
-            _reconf(prefix=f" {tag}", force=True)
-
-            class _PolicyTagFilter(logging.Filter):
-                def filter(self_, record):
-                    if not getattr(record, "_policy_tagged", False):
-                        record.msg = f"[{tag}] {record.msg}"
-                        record._policy_tagged = True
-                    return True
-
-            root = logging.getLogger()
-            # Avoid stacking filters if init runs more than once
-            root.filters = [f for f in root.filters if not isinstance(f, _PolicyTagFilter)]
-            root.addFilter(_PolicyTagFilter())
+        # Per-policy tagging is now handled by RayTrainGroup, which dynamically
+        # subclasses MegatronTrainRayActor → "MegatronTrainRayActor::<policy>".
+        # Ray's log prefix carries the tag, so we don't need to inject anything
+        # into the Python logging format here.
 
         monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)

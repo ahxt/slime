@@ -80,6 +80,17 @@ class RayTrainGroup:
 
         actor_impl = MegatronTrainRayActor
 
+        # Multi-policy: tag the Ray actor's class name with the policy name so
+        # Ray's per-actor log prefix becomes "(MegatronTrainRayActor::solver
+        # pid=...)" instead of the ambiguous "(MegatronTrainRayActor pid=...)".
+        # __name__ is just a string at log time, doesn't need to be a valid
+        # Python identifier; we never reference the class by this name.
+        policy_name = getattr(self.args, "policy_name", None)
+        if policy_name:
+            actor_impl = type(f"MegatronTrainRayActor_{policy_name}", (MegatronTrainRayActor,), {})
+            actor_impl.__name__ = f"MegatronTrainRayActor::{policy_name}"
+            actor_impl.__qualname__ = actor_impl.__name__
+
         TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(actor_impl)
 
         # Create worker actors
