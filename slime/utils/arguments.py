@@ -1678,7 +1678,12 @@ def slime_validate_args(args):
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
 
     if args.save_interval is not None:
-        assert args.save is not None, "'--save' is required when save_interval is set."
+        # Multi-policy: save dirs live per-policy in --config YAML, projected onto
+        # each policy's args namespace by config_to_namespace. The global args.save
+        # stays None on purpose; the driver iterates handles.values() and saves
+        # each one to its own dir.
+        if getattr(args, "config", None) is None:
+            assert args.save is not None, "'--save' is required when save_interval is set."
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
