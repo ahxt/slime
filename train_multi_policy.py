@@ -68,8 +68,12 @@ logger = logging.getLogger(__name__)
 def _set_multi_policy_global_defaults(args, policy_configs, actor_gpus: int, rollout_gpus: int) -> None:
     """Populate legacy global args that shared rollout code still reads.
 
-    Per-policy Megatron actors get their own namespaces later. These globals are
-    for the single RolloutManager/data-source side.
+    Per-policy Megatron actors get their own namespaces later (each cfg projected
+    via config_to_namespace). The values written here are for the single
+    RolloutManager + sglang engine setup, which is *cluster-level*: the physical
+    GPUs-per-node from --num-gpus-per-node MUST be preserved here, not the
+    per-policy slice size from cfg.num_gpus_per_node (those are different
+    concepts despite the unfortunate name overlap).
     """
     if not policy_configs:
         raise ValueError("multi-policy config must contain at least one policy")
@@ -77,23 +81,43 @@ def _set_multi_policy_global_defaults(args, policy_configs, actor_gpus: int, rol
     if args.hf_checkpoint is None:
         args.hf_checkpoint = policy_configs[0].hf_checkpoint
 
-    num_gpus_per_node_values = {cfg.num_gpus_per_node for cfg in policy_configs}
-    if len(num_gpus_per_node_values) != 1:
+    # All policies must agree on slice size in v1 — validates the cluster math.
+    slice_sizes = {cfg.num_gpus_per_node for cfg in policy_configs}
+    if len(slice_sizes) != 1:
         raise ValueError(
             "all policies must use the same num_gpus_per_node in v1; got "
-            f"{sorted(num_gpus_per_node_values)}"
+            f"{sorted(slice_sizes)}"
         )
-    num_gpus_per_node = policy_configs[0].num_gpus_per_node
 
     args.rollout_num_gpus = rollout_gpus
     args.megatron_total_gpus = actor_gpus
-    args.num_gpus_per_node = num_gpus_per_node
-    if actor_gpus % num_gpus_per_node == 0:
-        args.actor_num_nodes = actor_gpus // num_gpus_per_node
-        args.actor_num_gpus_per_node = num_gpus_per_node
-    else:
+
+    # Cluster-level args.num_gpus_per_node = physical GPUs per node (from CLI).
+    # Synthesize actor_num_nodes / actor_num_gpus_per_node so their product
+    # equals actor_gpus while respecting the physical-node limit. Downstream
+    # code (sglang_engine.get_base_gpu_id, weight_updater range checks) reads
+    # these as cluster-level totals.
+    phys_per_node = args.num_gpus_per_node
+    if actor_gpus <= phys_per_node:
         args.actor_num_nodes = 1
         args.actor_num_gpus_per_node = actor_gpus
+    elif actor_gpus % phys_per_node == 0:
+        args.actor_num_nodes = actor_gpus // phys_per_node
+        args.actor_num_gpus_per_node = phys_per_node
+    else:
+        raise ValueError(
+            f"actor_gpus ({actor_gpus}) is not <= or a multiple of "
+            f"--num-gpus-per-node ({phys_per_node}). Pass a --num-gpus-per-node "
+            f"that divides actor_gpus, or adjust the per-policy num_gpus_per_node."
+        )
+
+    # Manager reads global args.n_samples_per_prompt / args.global_batch_size for
+    # legacy single-buffer code paths (e.g. group-norm reshape fast path). With
+    # multi-policy split-buffer the per-policy args is what actually drives those,
+    # but keeping the manager-global consistent prevents silent CLI/config drift
+    # if users forget to add the corresponding --flag in the launcher.
+    args.n_samples_per_prompt = policy_configs[0].n_samples_per_prompt
+    args.global_batch_size = policy_configs[0].global_batch_size
 
 
 def train(args):

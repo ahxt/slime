@@ -700,7 +700,10 @@ def train(
             accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
             role = getattr(model[0], "role", "actor")
             policy_name = getattr(args, "policy_name", None)
-            role_tag = f"{policy_name}/" if policy_name else ("" if role == "actor" else f"{role}-")
+            # Compose both prefixes so multi-policy + critic (v2) doesn't collide.
+            policy_part = f"{policy_name}/" if policy_name else ""
+            role_part = "" if role == "actor" else f"{role}-"
+            role_tag = f"{policy_part}{role_part}"
             log_dict = {
                 f"train/{role_tag}{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
                 for key, val in loss_dict.items()
@@ -716,11 +719,15 @@ def train(
             logging_utils.log(args, log_dict, step_key="train/step")
 
             if args.ci_test and not args.ci_disable_kl_checker:
-                if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
+                # Keys carry the role_tag (policy/critic) prefix; build them at runtime.
+                ppo_kl_key = f"train/{role_tag}ppo_kl"
+                clipfrac_key = f"train/{role_tag}pg_clipfrac"
+                kl_loss_key = f"train/{role_tag}kl_loss"
+                if step_id == 0 and ppo_kl_key in log_dict and clipfrac_key in log_dict:
                     # TODO: figure out why KL is not exactly zero when using PPO loss with KL clipping, and whether this is expected behavior or a bug.
-                    assert log_dict["train/ppo_kl"] < 1e-8, f"{log_dict=}"
-                if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
-                    assert log_dict["train/kl_loss"] < 1e-8, f"{log_dict=}"
+                    assert log_dict[ppo_kl_key] < 1e-8, f"{log_dict=}"
+                if accumulated_step_id == 0 and kl_loss_key in log_dict:
+                    assert log_dict[kl_loss_key] < 1e-8, f"{log_dict=}"
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
 

@@ -40,14 +40,15 @@ ROLLOUT_ARGS=(
    --rm-type deepscaler
    --num-rollout 3000
    --rollout-batch-size 32
-   --n-samples-per-prompt 8
-   --global-batch-size 256
    --disable-rollout-trim-samples
    --rollout-max-context-len 16384
    --rollout-max-response-len 8192
    --rollout-temperature 1
    --balance-data
 )
+# n_samples_per_prompt and global_batch_size are projected onto manager-global
+# args from config.yaml's first policy by _set_multi_policy_global_defaults,
+# so we don't pass them on the CLI (would silently shadow the per-policy values).
 
 # Cluster sizing — derived from config.yaml:
 #   actor_gpus   = sum(policies[i].megatron_num_nodes * num_gpus_per_node)
