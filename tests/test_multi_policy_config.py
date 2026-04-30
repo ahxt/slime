@@ -346,7 +346,7 @@ class TestBuildSglangConfig:
             # Server-args (mem_fraction_static, chunked_prefill_size, etc.) should be folded in
             assert ov["mem_fraction_static"] == 0.5
             assert ov["chunked_prefill_size"] == 8192
-            assert ov["max_running_requests"] == 256
+            assert ov["max_running_requests"] == 32
             # attention_backend is intentionally not set in EXAMPLE_CONFIG → sglang's default
             assert "attention_backend" not in ov
             # Model-level fields must NOT have leaked into overrides
@@ -969,7 +969,7 @@ class TestSglangProjectionTypes:
         for m in sg.models:
             ov = m.server_groups[0].overrides
             assert ov["chunked_prefill_size"] == 8192
-            assert ov["max_running_requests"] == 256
+            assert ov["max_running_requests"] == 32
 
     def test_float_field_preserved(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
