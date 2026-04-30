@@ -65,6 +65,12 @@ class PolicyConfig:
     recompute_method: str | None = None  # "uniform" | "block" | None
     recompute_num_layers: int | None = None
 
+    # ── Weight-load mode ──
+    # "raw" (default): expects a Megatron torch_dist checkpoint at `load`.
+    # "bridge": when `load` is unset or stale, slime falls back to loading from
+    # `hf_checkpoint` via mbridge. Useful for first-time runs from an HF model.
+    megatron_to_hf_mode: str = "raw"
+
     # ── Batching ──
     micro_batch_size: int = 1
     global_batch_size: int = 64
