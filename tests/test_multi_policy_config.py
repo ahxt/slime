@@ -98,7 +98,7 @@ class TestExampleConfig:
         assert solver.lr == 1.0e-6
         assert solver.optimizer_cpu_offload is True
         assert solver.advantage_estimator == "grpo"
-        assert solver.n_samples_per_prompt == 8
+        assert solver.n_samples_per_prompt == 4
 
     def test_sglang_kept_as_dict_with_default_model_path(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
@@ -744,14 +744,15 @@ class TestExampleInvariants:
         assert len(saves) == len(set(saves)), f"save dirs must be distinct: {saves}"
 
     def test_n_samples_per_prompt_matches_num_parallel(self):
-        """Bug 1 fix regression: rollout_with_multi_agents.py num_parallel=8 must match
-        each policy's n_samples_per_prompt=8 in config.yaml so GRPO group-norm reshape
-        stays on the fast path."""
+        """Bug 1 fix regression: rollout_with_multi_agents.py num_parallel must match
+        each policy's n_samples_per_prompt in config.yaml so GRPO group-norm reshape
+        stays on the fast path. Both are 4 for the smoke-test sizing
+        (engines see ~64 requests each per rollout)."""
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         for cfg in cfgs:
-            assert cfg.n_samples_per_prompt == 8, (
+            assert cfg.n_samples_per_prompt == 4, (
                 f"{cfg.name}: n_samples_per_prompt={cfg.n_samples_per_prompt}, "
-                f"should be 8 to match MULTI_AGENT_CONFIGS['num_parallel']"
+                f"should be 4 to match MULTI_AGENT_CONFIGS['num_parallel']"
             )
 
     def test_selector_n_samples_not_one(self):
@@ -883,9 +884,9 @@ class TestExampleSourceStatic:
             src = f.read()
         assert "mean_selector_reward" in src or "mean(s.reward" in src
 
-    def test_rollout_fn_num_parallel_is_8(self):
+    def test_rollout_fn_num_parallel_is_4(self):
         """Bug 1 fix: num_parallel must equal n_samples_per_prompt across all
-        policies, which is 8 in the current config.yaml."""
+        policies, which is 4 in the current smoke-test config.yaml."""
         import ast
         with open(self.ROLLOUT_FN) as f:
             tree = ast.parse(f.read())
@@ -904,7 +905,7 @@ class TestExampleSourceStatic:
             if isinstance(k, ast.Constant) and k.value == "num_parallel":
                 num_parallel = v.value if isinstance(v, ast.Constant) else None
                 break
-        assert num_parallel == 8, f"num_parallel must be 8, got {num_parallel}"
+        assert num_parallel == 4, f"num_parallel must be 4, got {num_parallel}"
 
     def test_rollout_fn_points_at_multi_policy_module(self):
         """The custom_multi_agent_function_path must point at the new multi_policy_multi_agent

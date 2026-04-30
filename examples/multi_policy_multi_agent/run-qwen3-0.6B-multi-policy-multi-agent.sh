@@ -39,7 +39,7 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   --rollout-batch-size 32
+   --rollout-batch-size 4
    --disable-rollout-trim-samples
    --rollout-max-context-len 16384
    --rollout-max-response-len 8192

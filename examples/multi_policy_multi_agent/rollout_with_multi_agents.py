@@ -9,7 +9,7 @@ MULTI_AGENT_CONFIGS = {
     "custom_multi_agent_function_path": "examples.multi_policy_multi_agent.agent_system.run_agent_system",
     # num_parallel must match n_samples_per_prompt for solver / rewriter / selector
     # in config.yaml so GRPO group-norm reshape stays on the fast path.
-    "num_parallel": 8,
+    "num_parallel": 4,
     "incorrect_reward_weight": 0.8,
     "correct_reward_weight": 1.2,
 }

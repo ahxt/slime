@@ -55,7 +55,7 @@ policies:
       recompute_num_layers: 1
 
       micro_batch_size: 1
-      global_batch_size: 256
+      global_batch_size: 32
       use_dynamic_batch_size: true
       max_tokens_per_gpu: 20480
 
@@ -70,7 +70,7 @@ policies:
       use_precision_aware_optimizer: true
 
       advantage_estimator: grpo
-      n_samples_per_prompt: 8
+      n_samples_per_prompt: 4
       eps_clip: 0.2
       eps_clip_high: 0.28
       kl_coef: 0
@@ -126,7 +126,7 @@ policies:
       recompute_num_layers: 1
 
       micro_batch_size: 1
-      global_batch_size: 256
+      global_batch_size: 32
       use_dynamic_batch_size: true
       max_tokens_per_gpu: 20480
 
@@ -141,7 +141,7 @@ policies:
       use_precision_aware_optimizer: true
 
       advantage_estimator: grpo
-      n_samples_per_prompt: 8
+      n_samples_per_prompt: 4
       eps_clip: 0.2
       kl_coef: 0
       use_kl_loss: false
@@ -188,7 +188,7 @@ policies:
       recompute_num_layers: 1
 
       micro_batch_size: 1
-      global_batch_size: 256
+      global_batch_size: 32
       use_dynamic_batch_size: true
       max_tokens_per_gpu: 20480
 
@@ -203,7 +203,7 @@ policies:
       use_precision_aware_optimizer: true
 
       advantage_estimator: grpo
-      n_samples_per_prompt: 8     # N parallel selectors per problem (matches num_parallel)
+      n_samples_per_prompt: 4     # N parallel selectors per problem (matches num_parallel)
       eps_clip: 0.2
       kl_coef: 0
       use_kl_loss: false
