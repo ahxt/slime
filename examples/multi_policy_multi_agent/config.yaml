@@ -85,7 +85,6 @@ policies:
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 256
-      attention_backend: flashinfer
       log_level: info
       # Optional (uncomment to enable):
       # max_total_tokens: 1048576
@@ -155,7 +154,6 @@ policies:
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 256
-      attention_backend: flashinfer
       log_level: info
 
       server_groups:
@@ -218,7 +216,6 @@ policies:
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 256
-      attention_backend: flashinfer
       log_level: info
 
       server_groups:

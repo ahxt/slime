@@ -343,11 +343,12 @@ class TestBuildSglangConfig:
         sglang_config = build_sglang_config_from_policies(cfgs)
         for m in sglang_config.models:
             ov = m.server_groups[0].overrides
-            # Server-args (mem_fraction_static, attention_backend, etc.) should be folded in
+            # Server-args (mem_fraction_static, chunked_prefill_size, etc.) should be folded in
             assert ov["mem_fraction_static"] == 0.5
-            assert ov["attention_backend"] == "flashinfer"
             assert ov["chunked_prefill_size"] == 8192
             assert ov["max_running_requests"] == 256
+            # attention_backend is intentionally not set in EXAMPLE_CONFIG → sglang's default
+            assert "attention_backend" not in ov
             # Model-level fields must NOT have leaked into overrides
             assert "num_gpus_per_engine" not in ov
             assert "update_weights" not in ov
