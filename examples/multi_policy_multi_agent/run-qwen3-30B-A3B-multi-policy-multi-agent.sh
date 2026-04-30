@@ -24,7 +24,7 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../scripts/models/qwen3.5-0.8B.sh"
+source "${SCRIPT_DIR}/../../scripts/models/qwen3-0.6B.sh"
 
 # Per-policy fields (parallel, recompute, batching, optimizer, loss, paths)
 # all live in config.yaml — one block per actor.
@@ -85,7 +85,7 @@ EVAL_ARGS=(
 WANDB_ARGS=(
    #--use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3.5-0.8B-multi-policy-multi-agent
+   # --wandb-group qwen3-0.6B-multi-policy-multi-agent
 )
 
 # sglang server args are per-policy in config.yaml (sglang sub-block).

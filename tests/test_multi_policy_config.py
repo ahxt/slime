@@ -979,7 +979,7 @@ class TestSglangProjectionTypes:
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         sg = build_sglang_config_from_policies(cfgs)
         for m in sg.models:
-            assert m.model_path == "Qwen/Qwen3.5-0.8B"
+            assert m.model_path == "Qwen/Qwen3-0.6B"
 
     def test_num_gpus_per_engine_passed_through(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
