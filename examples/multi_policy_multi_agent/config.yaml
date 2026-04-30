@@ -81,7 +81,7 @@ policies:
       num_gpus_per_engine: 2
       # model_path defaults to top-level hf_checkpoint
 
-      mem_fraction_static: 0.7
+      mem_fraction_static: 0.5  # L40S has 46 GB; leave room for the colocated Megatron actor
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 256
@@ -151,7 +151,7 @@ policies:
       update_weights: true
       num_gpus_per_engine: 2
 
-      mem_fraction_static: 0.7
+      mem_fraction_static: 0.5  # L40S has 46 GB; leave room for the colocated Megatron actor
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 256
@@ -214,7 +214,7 @@ policies:
       update_weights: true
       num_gpus_per_engine: 2
 
-      mem_fraction_static: 0.7
+      mem_fraction_static: 0.5  # L40S has 46 GB; leave room for the colocated Megatron actor
       cuda_graph_bs: [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 96, 128, 192, 256]
       chunked_prefill_size: 8192
       max_running_requests: 256
