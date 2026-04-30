@@ -1167,5 +1167,60 @@ class TestConfigToNamespaceProjection:
         assert dataclasses.asdict(cfg) == before
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Per-policy weight-load fallback — the critical chain that lets a policy
+# load weights from HF when no Megatron torch_dist checkpoint exists yet
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class TestWeightLoadFallback:
+    def _ns(self, **overrides):
+        from argparse import Namespace
+        defaults = dict(no_load_optim=False, no_load_rng=False, finetune=False, ref_load=None,
+                        start_rollout_id=None)
+        defaults.update(overrides)
+        return Namespace(**defaults)
+
+    def test_bridge_with_load_none_falls_back_to_hf_checkpoint(self):
+        """The user's case: load is unset in config.yaml, megatron_to_hf_mode=bridge.
+        config_to_namespace must populate ns.load with hf_checkpoint so the
+        actor's `assert args.load is not None` passes."""
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(megatron_to_hf_mode="bridge", load=None,
+                             hf_checkpoint="Qwen/Qwen3-0.6B")
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.load == "Qwen/Qwen3-0.6B"
+        assert ns.start_rollout_id == 0
+
+    def test_bridge_with_real_megatron_ckpt_keeps_load(self, tmp_path):
+        """If `load` points at a real torch_dist Megatron ckpt, bridge mode
+        respects it (resumes instead of HF-loading)."""
+        from slime.utils.policy_config import config_to_namespace
+        ckpt = tmp_path / "ckpt"
+        ckpt.mkdir()
+        (ckpt / "latest_checkpointed_iteration.txt").write_text("100")
+        cfg = _minimal_actor(megatron_to_hf_mode="bridge", load=str(ckpt))
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.load == str(ckpt)
+
+    def test_bridge_uses_ref_load_when_set(self):
+        """Documented order: ref_load wins over hf_checkpoint when load is None."""
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(megatron_to_hf_mode="bridge", load=None, ref_load="/path/ref")
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.load == "/path/ref"
+
+    def test_raw_mode_with_no_ckpt_marks_finetune(self):
+        """Default raw mode + no real ckpt → mirror slime_validate_args:
+        no_load_optim=True, no_load_rng=True, finetune=True, start_rollout_id=0."""
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(megatron_to_hf_mode="raw", load="/does/not/exist")
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.no_load_optim is True
+        assert ns.no_load_rng is True
+        assert ns.finetune is True
+        assert ns.start_rollout_id == 0
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
