@@ -54,6 +54,15 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args = args
             return 0
 
+        # Reconfigure the logger to include the policy name in every log line.
+        # TrainRayActor.__init__ already called configure_logger() with no prefix
+        # before args were available; reconfigure here so multi-policy runs can
+        # tell solver/rewriter/selector logs apart at a glance.
+        policy_name = getattr(args, "policy_name", None)
+        if policy_name:
+            from slime.utils.logging_utils import configure_logger as _reconf
+            _reconf(prefix=f" {policy_name}:{role}", force=True)
+
         monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
 

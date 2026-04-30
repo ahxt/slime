@@ -9,9 +9,9 @@ _LOGGER_CONFIGURED = False
 
 
 # ref: SGLang
-def configure_logger(prefix: str = ""):
+def configure_logger(prefix: str = "", force: bool = False):
     global _LOGGER_CONFIGURED
-    if _LOGGER_CONFIGURED:
+    if _LOGGER_CONFIGURED and not force:
         return
 
     _LOGGER_CONFIGURED = True
