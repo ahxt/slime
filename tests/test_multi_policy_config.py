@@ -345,7 +345,7 @@ class TestBuildSglangConfig:
             ov = m.server_groups[0].overrides
             # Server-args (mem_fraction_static, attention_backend, etc.) should be folded in
             assert ov["mem_fraction_static"] == 0.5
-            assert ov["attention_backend"] == "flash"
+            assert ov["attention_backend"] == "flashinfer"
             assert ov["chunked_prefill_size"] == 8192
             assert ov["max_running_requests"] == 256
             # Model-level fields must NOT have leaked into overrides
