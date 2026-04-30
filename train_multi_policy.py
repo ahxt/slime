@@ -80,6 +80,13 @@ def _set_multi_policy_global_defaults(args, policy_configs, actor_gpus: int, rol
 
     if args.hf_checkpoint is None:
         args.hf_checkpoint = policy_configs[0].hf_checkpoint
+    # _set_default_megatron_args (run at parse_args time) tried to fall back
+    # tokenizer_model to hf_checkpoint, but hf_checkpoint was still None then,
+    # so tokenizer_model got pinned to None. Re-derive now that we know it.
+    if getattr(args, "tokenizer_model", None) is None:
+        args.tokenizer_model = args.hf_checkpoint
+        if not getattr(args, "tokenizer_type", None):
+            args.tokenizer_type = "HuggingFaceTokenizer"
 
     # All policies must agree on slice size in v1 — validates the cluster math.
     slice_sizes = {cfg.num_gpus_per_node for cfg in policy_configs}

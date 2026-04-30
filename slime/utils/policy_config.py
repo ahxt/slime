@@ -296,6 +296,13 @@ def config_to_namespace(cfg: "PolicyConfig", base_args):
     ns.num_gpus_per_node = cfg.num_gpus_per_node
     ns.world_size = cfg.megatron_num_nodes * cfg.num_gpus_per_node
     ns.policy_name = cfg.name
+    # Megatron's tokenizer fallback runs at parse_args time when global
+    # hf_checkpoint may still be None. Re-derive per policy now that
+    # cfg.hf_checkpoint is known.
+    if getattr(ns, "tokenizer_model", None) is None:
+        ns.tokenizer_model = cfg.hf_checkpoint
+        if not getattr(ns, "tokenizer_type", None):
+            ns.tokenizer_type = "HuggingFaceTokenizer"
     return ns
 
 
