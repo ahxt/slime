@@ -107,10 +107,15 @@ RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM/\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-    \"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"
+    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
   }
 }"
+# NOTE: do NOT set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True here —
+# torch_memory_saver (which sglang uses for colocate-mode pause/resume)
+# refuses to initialize when expandable_segments is enabled. Choose one:
+# colocate offload OR expandable segments. We need offload, so we skip
+# expandable segments and rely on the other knobs (smaller chunk sizes,
+# zero margin, smaller mem_fraction) for fragmentation control.
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
