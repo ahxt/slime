@@ -99,11 +99,12 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     args = get_args()
     load_path = args.load
 
-    assert Path(load_path).exists() and _is_dir_nonempty(
-        load_path
-    ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
-
     if _is_megatron_checkpoint(load_path):
+        # Megatron torch_dist checkpoint: must be a local non-empty directory
+        # with latest_checkpointed_iteration.txt.
+        assert Path(load_path).exists() and _is_dir_nonempty(
+            load_path
+        ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
         return _load_checkpoint_megatron(
             ddp_model=ddp_model,
             optimizer=optimizer,
@@ -111,13 +112,17 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             checkpointing_context=checkpointing_context,
             skip_load_to_model_and_opt=skip_load_to_model_and_opt,
         )
-    else:
-        return _load_checkpoint_hf(
-            ddp_model=ddp_model,
-            optimizer=optimizer,
-            args=args,
-            load_path=load_path,
-        )
+
+    # HF path. load_path may be a local directory OR a HuggingFace Hub repo
+    # ID like "Qwen/Qwen3-0.6B" (resolved by AutoBridge.from_hf_pretrained
+    # via the Hub cache). Don't enforce local-fs existence — mbridge will
+    # raise a clearer error if the repo can't be resolved.
+    return _load_checkpoint_hf(
+        ddp_model=ddp_model,
+        optimizer=optimizer,
+        args=args,
+        load_path=load_path,
+    )
 
 
 def _is_megatron_checkpoint(path: str | Path) -> bool:
