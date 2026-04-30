@@ -63,7 +63,8 @@ NUM_GPUS=3
 TRAIN_ARGS=(
    --config "${SCRIPT_DIR}/config.yaml"
    --save-interval 20
-   --log-probs-chunk-size 1024
+   --log-probs-chunk-size 512
+   --train-memory-margin-bytes 0
 )
 # Note: train_multi_policy.py derives args.rollout_num_gpus from config.yaml
 # (sum of sglang_num_nodes × num_gpus_per_node across policies), so no
@@ -108,7 +109,8 @@ RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM/\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
+    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
+    \"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"
   }
 }"
 
