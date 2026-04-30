@@ -90,11 +90,16 @@ class ServerGroup:
         pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
 
         # Tag the Ray actor's class name with the policy name so Ray's per-actor
-        # log prefix becomes "(SGLangEngine_solver pid=...)" instead of the
+        # log prefix becomes "(SGLangEngine::solver pid=...)" instead of the
         # ambiguous "(SGLangEngine pid=...)". Sglang subprocess stdout is captured
-        # under this same prefix, so this also tags those lines.
+        # under this same prefix, so this also tags those lines. We use "::" as
+        # the separator (cleaner than "_" when names already contain underscores);
+        # Python's __name__ is just a string and doesn't need to be a valid
+        # identifier — we never reference the class by this name.
         if self.model_name and self.model_name != "default":
             _EngineCls = type(f"SGLangEngine_{self.model_name}", (SGLangEngine,), {})
+            _EngineCls.__name__ = f"SGLangEngine::{self.model_name}"
+            _EngineCls.__qualname__ = _EngineCls.__name__
         else:
             _EngineCls = SGLangEngine
         RolloutRayActor = ray.remote(_EngineCls)
