@@ -42,6 +42,7 @@ policies:
     sglang_num_nodes: 1
 
     megatron:
+      megatron-to-hf-mode: bridge
       tensor_model_parallel_size: 1
       pipeline_model_parallel_size: 1
       context_parallel_size: 1
@@ -113,6 +114,7 @@ policies:
     sglang_num_nodes: 1
 
     megatron:
+      megatron-to-hf-mode: bridge
       tensor_model_parallel_size: 1
       pipeline_model_parallel_size: 1
       context_parallel_size: 1
@@ -174,6 +176,7 @@ policies:
     sglang_num_nodes: 1
 
     megatron:
+      megatron-to-hf-mode: bridge
       tensor_model_parallel_size: 1
       pipeline_model_parallel_size: 1
       context_parallel_size: 1
