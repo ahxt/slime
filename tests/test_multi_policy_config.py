@@ -344,7 +344,7 @@ class TestBuildSglangConfig:
         for m in sglang_config.models:
             ov = m.server_groups[0].overrides
             # Server-args (mem_fraction_static, chunked_prefill_size, etc.) should be folded in
-            assert ov["mem_fraction_static"] == 0.5
+            assert ov["mem_fraction_static"] == 0.3
             assert ov["chunked_prefill_size"] == 8192
             assert ov["max_running_requests"] == 32
             # attention_backend is intentionally not set in EXAMPLE_CONFIG → sglang's default
@@ -955,7 +955,7 @@ class TestSglangProjectionTypes:
             cuda_bs = m.server_groups[0].overrides["cuda_graph_bs"]
             assert isinstance(cuda_bs, list)
             assert cuda_bs[0] == 1
-            assert 256 in cuda_bs
+            assert 32 in cuda_bs  # max_running_requests=32 is captured
 
     def test_string_field_preserved(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
@@ -975,7 +975,7 @@ class TestSglangProjectionTypes:
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         sg = build_sglang_config_from_policies(cfgs)
         for m in sg.models:
-            assert m.server_groups[0].overrides["mem_fraction_static"] == 0.5
+            assert m.server_groups[0].overrides["mem_fraction_static"] == 0.3
 
     def test_model_path_passed_through(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
