@@ -57,6 +57,7 @@ class ServerGroup:
     model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
+    model_name: str = "default"  # used to tag Ray actor logs per policy
 
     @property
     def nodes_per_engine(self):
@@ -88,7 +89,15 @@ class ServerGroup:
 
         pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
 
-        RolloutRayActor = ray.remote(SGLangEngine)
+        # Tag the Ray actor's class name with the policy name so Ray's per-actor
+        # log prefix becomes "(SGLangEngine_solver pid=...)" instead of the
+        # ambiguous "(SGLangEngine pid=...)". Sglang subprocess stdout is captured
+        # under this same prefix, so this also tags those lines.
+        if self.model_name and self.model_name != "default":
+            _EngineCls = type(f"SGLangEngine_{self.model_name}", (SGLangEngine,), {})
+        else:
+            _EngineCls = SGLangEngine
+        RolloutRayActor = ray.remote(_EngineCls)
 
         rollout_engines = []
         for i in range(len(self.all_engines)):
@@ -1249,6 +1258,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 model_path=overrides.get("model_path", args.hf_checkpoint),
                 router_ip=router_ip,
                 router_port=router_port,
+                model_name=model_cfg.name,
             )
             engine_offset += num_engines
             gpu_offset += group_cfg.num_gpus
