@@ -57,7 +57,7 @@ policies:
       micro_batch_size: 1
       global_batch_size: 32
       use_dynamic_batch_size: true
-      max_tokens_per_gpu: 20480
+      max_tokens_per_gpu: 8192
 
       optimizer: adam
       lr: 1.0e-6
@@ -128,7 +128,7 @@ policies:
       micro_batch_size: 1
       global_batch_size: 32
       use_dynamic_batch_size: true
-      max_tokens_per_gpu: 20480
+      max_tokens_per_gpu: 8192
 
       optimizer: adam
       lr: 1.0e-6
@@ -190,7 +190,7 @@ policies:
       micro_batch_size: 1
       global_batch_size: 32
       use_dynamic_batch_size: true
-      max_tokens_per_gpu: 20480
+      max_tokens_per_gpu: 8192
 
       optimizer: adam
       lr: 1.0e-6
