@@ -54,6 +54,16 @@ policies:
       recompute_method: uniform
       recompute_num_layers: 1
 
+      # RL-correctness defaults (zero dropout, fp32 reductions/softmax)
+      attention_dropout: 0.0
+      hidden_dropout: 0.0
+      accumulate_allreduce_grads_in_fp32: true
+      attention_softmax_in_fp32: true
+
+      # Chunk the [T, V] logits along T to bound forward peak (152K vocab is
+      # heavy on L40S). Set to -1 to disable.
+      log_probs_chunk_size: 512
+
       micro_batch_size: 1
       global_batch_size: 32
       use_dynamic_batch_size: true
@@ -125,6 +135,16 @@ policies:
       recompute_method: uniform
       recompute_num_layers: 1
 
+      # RL-correctness defaults (zero dropout, fp32 reductions/softmax)
+      attention_dropout: 0.0
+      hidden_dropout: 0.0
+      accumulate_allreduce_grads_in_fp32: true
+      attention_softmax_in_fp32: true
+
+      # Chunk the [T, V] logits along T to bound forward peak (152K vocab is
+      # heavy on L40S). Set to -1 to disable.
+      log_probs_chunk_size: 512
+
       micro_batch_size: 1
       global_batch_size: 32
       use_dynamic_batch_size: true
@@ -186,6 +206,16 @@ policies:
       recompute_granularity: full
       recompute_method: uniform
       recompute_num_layers: 1
+
+      # RL-correctness defaults (zero dropout, fp32 reductions/softmax)
+      attention_dropout: 0.0
+      hidden_dropout: 0.0
+      accumulate_allreduce_grads_in_fp32: true
+      attention_softmax_in_fp32: true
+
+      # Chunk the [T, V] logits along T to bound forward peak (152K vocab is
+      # heavy on L40S). Set to -1 to disable.
+      log_probs_chunk_size: 512
 
       micro_batch_size: 1
       global_batch_size: 32

@@ -60,6 +60,21 @@ class PolicyConfig:
     expert_tensor_parallel_size: int = 1
     sequence_parallel: bool = False
 
+    # ── Megatron numerical / dropout (RL-correctness defaults) ──
+    # Megatron defaults attention_dropout / hidden_dropout to 0.1; RL training
+    # needs deterministic forward (rollout-time and train-time log probs must
+    # match) so we default these to 0 for any policy.
+    attention_dropout: float = 0.0
+    hidden_dropout: float = 0.0
+    accumulate_allreduce_grads_in_fp32: bool = True
+    attention_softmax_in_fp32: bool = True
+
+    # ── Memory: chunked log-prob computation ──
+    # >0 chunks the [T, V] logits tensor along T to reduce forward peak; -1
+    # disables chunking. Critical for vocab-heavy models on tight VRAM (e.g.
+    # Qwen3 with 152K vocab on L40S).
+    log_probs_chunk_size: int = -1
+
     # ── Recompute (memory/compute trade) ──
     recompute_granularity: str | None = None  # "full" | "selective" | None
     recompute_method: str | None = None  # "uniform" | "block" | None

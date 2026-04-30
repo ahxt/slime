@@ -63,7 +63,6 @@ NUM_GPUS=3
 TRAIN_ARGS=(
    --config "${SCRIPT_DIR}/config.yaml"
    --save-interval 20
-   --log-probs-chunk-size 512
    --train-memory-margin-bytes 0
 )
 # Note: train_multi_policy.py derives args.rollout_num_gpus from config.yaml
@@ -95,12 +94,11 @@ WANDB_ARGS=(
 # Each policy declares its own: model_path, num_gpus_per_engine, mem_fraction_static,
 # cuda_graph_bs, chunked_prefill_size, max_running_requests, attention_backend, server_groups, etc.
 
-MISC_ARGS=(
-   --attention-dropout 0.0
-   --hidden-dropout 0.0
-   --accumulate-allreduce-grads-in-fp32
-   --attention-softmax-in-fp32
-)
+# Megatron numerical / dropout flags (attention_dropout, hidden_dropout,
+# accumulate_allreduce_grads_in_fp32, attention_softmax_in_fp32) live in
+# config.yaml's per-policy megatron: block — they belong there alongside
+# tensor_model_parallel_size etc. RL-correctness invariants (zero dropout,
+# fp32 reductions/softmax) are policy-level concerns, not run-level.
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
@@ -122,5 +120,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${TRAIN_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${WANDB_ARGS[@]} \
-   ${EVAL_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   ${EVAL_ARGS[@]}
