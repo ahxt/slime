@@ -344,7 +344,7 @@ class TestBuildSglangConfig:
         for m in sglang_config.models:
             ov = m.server_groups[0].overrides
             # Server-args (mem_fraction_static, chunked_prefill_size, etc.) should be folded in
-            assert ov["mem_fraction_static"] == 0.5
+            assert ov["mem_fraction_static"] == 0.7
             assert ov["chunked_prefill_size"] == 8192
             assert ov["max_running_requests"] == 32
             # attention_backend is intentionally not set in EXAMPLE_CONFIG → sglang's default
@@ -975,7 +975,7 @@ class TestSglangProjectionTypes:
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
         sg = build_sglang_config_from_policies(cfgs)
         for m in sg.models:
-            assert m.server_groups[0].overrides["mem_fraction_static"] == 0.5
+            assert m.server_groups[0].overrides["mem_fraction_static"] == 0.7
 
     def test_model_path_passed_through(self):
         cfgs = parse_policy_configs(EXAMPLE_CONFIG)
