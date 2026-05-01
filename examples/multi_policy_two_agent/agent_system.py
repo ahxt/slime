@@ -33,6 +33,32 @@ from .prompts import SOLVER_PROMPT_TEMPLATE, generate_select_template
 _INNER_SAMPLE_ID = itertools.count(start=1_000_000_000)
 
 
+# Match the chat-control tokens slime's apply_chat_template emits for Qwen-style
+# models. We strip these from the solver's chat-formatted prompt before
+# embedding it as plain "problem text" inside the selector's template.
+_CHAT_TOKEN_RE = re.compile(r"<\|im_(?:start|end)\|>(?:user|assistant|system)?\s*")
+
+
+def _strip_chat_tokens(text: str) -> str:
+    """Strip Qwen/sglang chat-control tokens (<|im_start|>user, etc.) so the
+    inner problem text can be embedded inside another prompt without nesting
+    chat structures (which confuses the selector model)."""
+    return _CHAT_TOKEN_RE.sub("", text).strip()
+
+
+def _wrap_user_turn(tokenizer, user_content: str) -> str:
+    """Render `user_content` as a single-turn user message via the tokenizer's
+    chat template. Falls back to a manual wrap if the tokenizer has no
+    chat_template (e.g. unit-test stubs)."""
+    if getattr(tokenizer, "chat_template", None) is None:
+        return f"<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
+    return tokenizer.apply_chat_template(
+        [{"role": "user", "content": user_content}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
 async def generate_response(args, prompt, key):
     """Call the policy's paired sglang engine with `prompt`. Tags the resulting
     Sample with policy_name=key so the manager routes it to the right buffer."""
@@ -118,10 +144,18 @@ class SolverAgent(Agent):
 class SelectorAgent(Agent):
     async def select(self, args, problem_statement, candidate_solutions: list[str]) -> str:
         template = generate_select_template(len(candidate_solutions))
+        # problem_statement comes in raw (no chat tokens) — see run_agent_system.
+        # The candidate solutions are model outputs which may contain stray
+        # <|im_end|> tokens; strip those too so the selector's prompt has clean
+        # text inside its candidate sections.
         format_params = {"problem_statement": problem_statement}
         for i, solution in enumerate(candidate_solutions):
-            format_params[f"solution{i+1}"] = solution
-        prompt = template.format(**format_params)
+            format_params[f"solution{i+1}"] = _strip_chat_tokens(solution)
+        body = template.format(**format_params)
+        # Wrap the whole selector prompt as a proper user turn so the model
+        # receives an unambiguous chat-formatted message instead of the prior
+        # bare-text-with-nested-tokens mess.
+        prompt = _wrap_user_turn(args.tokenizer, body)
         return await self.run(args, prompt, max_retries=10, key="selector")
 
     def extract_selected_solution_idx(self, response: str, candidate_solutions: list[str]) -> int | None:
@@ -172,10 +206,18 @@ async def run_agent_system(args, sample):
     args.sample = sample
     args.results_dict = {"solver": [], "selector": []}
 
-    problem_statement = sample.prompt
+    # The solver's prompt was already chat-templated by slime upstream and
+    # contains <|im_start|>user / <|im_end|> tokens. The solver passes that
+    # straight through to sglang (which expects chat format), but we cannot
+    # embed the chat-formatted string inside the selector's "### Problem"
+    # field — that produces nested chat structures and breaks the selector
+    # model. Keep the chat-formatted version for the solver and a clean
+    # raw version for use inside the selector template.
+    solver_prompt = sample.prompt
+    raw_problem = _strip_chat_tokens(sample.prompt)
 
     # Phase 1 — solvers (in parallel)
-    tasks = [solver_worker(args, problem_statement, wid) for wid in range(args.num_parallel)]
+    tasks = [solver_worker(args, solver_prompt, wid) for wid in range(args.num_parallel)]
     await asyncio.gather(*tasks, return_exceptions=True)
 
     rewards = await batched_async_rm(args, args.results_dict["solver"])
@@ -194,7 +236,7 @@ async def run_agent_system(args, sample):
         return args.results_dict["solver"]
 
     # Phase 2 — selectors (in parallel; each picks one of the solver candidates)
-    tasks = [select_worker(args, problem_statement, candidate_solutions, wid) for wid in range(args.num_parallel)]
+    tasks = [select_worker(args, raw_problem, candidate_solutions, wid) for wid in range(args.num_parallel)]
     await asyncio.gather(*tasks, return_exceptions=True)
 
     if len(args.results_dict["selector"]) == 0:
@@ -203,7 +245,11 @@ async def run_agent_system(args, sample):
 
     # Reward propagation: each selector sample's reward = reward of the solution
     # it picked. Match by response_content text since task order may not align.
+    # Track parsing success separately — selectors that fail to emit a parseable
+    # "Judgment: N" must NOT contribute to mean_selector_reward, otherwise a
+    # parse failure (selector-side bug) penalizes correct solvers (anti-train).
     selector = SelectorAgent()
+    parsed_selector_rewards: list[float] = []
     for sel_sample in args.results_dict["selector"]:
         if sel_sample.response_content is None:
             sel_sample.reward = 0
@@ -218,10 +264,18 @@ async def run_agent_system(args, sample):
             if solver_s.response_content == picked_solution:
                 sel_sample.reward = solver_s.reward
                 break
+        parsed_selector_rewards.append(sel_sample.reward)
 
-    # Group-level reward shaping: bonus all roles when the average selector
-    # reward suggests the agents found a correct answer.
-    mean_selector_reward = sum(s.reward for s in args.results_dict["selector"]) / len(args.results_dict["selector"])
+    # If every selector failed to parse, we have no judgment signal. Keep the
+    # raw solver rewards untouched — anything else (e.g. multiplying by
+    # incorrect_reward_weight) anti-trains correct solvers when the selector
+    # is broken in some prompt-specific way (#2 from the audit).
+    if not parsed_selector_rewards:
+        return args.results_dict["solver"] + args.results_dict["selector"]
+
+    # Group-level reward shaping: bonus all roles when the average parsed
+    # selector reward suggests the agents found a correct answer.
+    mean_selector_reward = sum(parsed_selector_rewards) / len(parsed_selector_rewards)
     weight = args.correct_reward_weight if mean_selector_reward > 0.5 else args.incorrect_reward_weight
     reward_adjustment(args.results_dict["solver"], weight)
     reward_adjustment(args.results_dict["selector"], weight)

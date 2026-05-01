@@ -18,6 +18,26 @@ from .prompts import SOLVER_PROMPT_TEMPLATE, generate_rewriter_template, generat
 _INNER_SAMPLE_ID = itertools.count(start=1_000_000_000)
 
 
+# Strip Qwen/sglang chat-control tokens so chat-formatted text can be embedded
+# inside another prompt body without nesting chat structures.
+_CHAT_TOKEN_RE = re.compile(r"<\|im_(?:start|end)\|>(?:user|assistant|system)?\s*")
+
+
+def _strip_chat_tokens(text: str) -> str:
+    return _CHAT_TOKEN_RE.sub("", text).strip()
+
+
+def _wrap_user_turn(tokenizer, user_content: str) -> str:
+    """Render `user_content` as a single-turn user message via chat template."""
+    if getattr(tokenizer, "chat_template", None) is None:
+        return f"<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
+    return tokenizer.apply_chat_template(
+        [{"role": "user", "content": user_content}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
 async def generate_response(args, prompt, key):
     try:
         sampling_params = args.sampling_params
@@ -134,11 +154,15 @@ class RewriterAgent(Agent):
         template = generate_rewriter_template(len(previous_solutions))
 
         # Populate the template arguments.
+        # problem_statement comes in raw (no chat tokens). Solutions are model
+        # outputs which may carry stray <|im_end|> — strip those too.
         format_params = {"problem_statement": problem_statement}
         for i, solution in enumerate(previous_solutions):
-            format_params[f"solution{i+1}"] = solution
+            format_params[f"solution{i+1}"] = _strip_chat_tokens(solution)
 
-        prompt = template.format(**format_params)
+        body = template.format(**format_params)
+        # Wrap as a proper user turn so the model sees an unambiguous chat msg.
+        prompt = _wrap_user_turn(args.tokenizer, body)
         return await self.run(args, prompt, max_retries=1, key="rewriter")
 
 
@@ -155,11 +179,13 @@ class SelectorAgent(Agent):
         template = generate_select_template(len(candidate_solutions))
 
         # Populate the template arguments.
+        # problem_statement is raw (no chat tokens); solutions are stripped too.
         format_params = {"problem_statement": problem_statement}
         for i, solution in enumerate(candidate_solutions):
-            format_params[f"solution{i+1}"] = solution
+            format_params[f"solution{i+1}"] = _strip_chat_tokens(solution)
 
-        prompt = template.format(**format_params)
+        body = template.format(**format_params)
+        prompt = _wrap_user_turn(args.tokenizer, body)
         return await self.run(args, prompt, max_retries=10, key="selector")
 
     def extract_selected_solution_idx(self, response: str, candidate_solutions: list[str]) -> int:
@@ -225,8 +251,14 @@ async def run_agent_system(args, sample):
     args.sample = sample
     args.results_dict = {"solver": [], "rewriter": [], "selector": []}
 
-    problem_statement = sample.prompt
-    tasks = [solver_worker(args, problem_statement, worker_id) for worker_id in range(args.num_parallel)]
+    # Solver gets the chat-formatted prompt straight through (sglang expects
+    # chat format). Rewriter / selector embed the problem inside their own
+    # template — they need the RAW text, not the chat-tagged version, or we
+    # end up with nested <|im_start|>user...<|im_end|> structures that
+    # confuse the model.
+    solver_prompt = sample.prompt
+    raw_problem = _strip_chat_tokens(sample.prompt)
+    tasks = [solver_worker(args, solver_prompt, worker_id) for worker_id in range(args.num_parallel)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     rewards = await batched_async_rm(args, args.results_dict["solver"])
@@ -244,9 +276,10 @@ async def run_agent_system(args, sample):
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
         return args.results_dict["solver"]
 
-    # Rewriting
+    # Rewriting — feed the raw (un-chat-templated) problem to the rewriter
+    # template so the inner solver chat tokens don't leak through.
     tasks = [
-        rewrite_worker(args, previous_solutions, problem_statement, worker_id)
+        rewrite_worker(args, previous_solutions, raw_problem, worker_id)
         for worker_id in range(args.num_parallel)
     ]
     rewrited_solutions_raw = await asyncio.gather(*tasks, return_exceptions=True)
@@ -268,9 +301,11 @@ async def run_agent_system(args, sample):
 
     # Selection — run num_parallel selectors so the selector policy gets enough
     # trajectories per problem for GRPO group-norm (matches n_samples_per_prompt).
+    # Selector also receives the raw problem (no chat tokens) — its template
+    # will chat-template the whole thing as a user turn.
     selector = SelectorAgent()  # used for extract_selected_solution_idx
     tasks = [
-        select_worker(args, problem_statement, rewrited_solutions, worker_id)
+        select_worker(args, raw_problem, rewrited_solutions, worker_id)
         for worker_id in range(args.num_parallel)
     ]
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -283,6 +318,11 @@ async def run_agent_system(args, sample):
     # Assign each selector trajectory its own reward based on which rewriter solution
     # it picked. Use sample.response_content (set by generate_response) so the order
     # of args.results_dict["selector"] doesn't have to match task order.
+    # Track parsing success — selectors that fail to emit a parseable judgment
+    # must NOT contribute to mean_selector_reward, otherwise a parse failure
+    # (e.g. "Judgment: IDX.AUTHOR") penalizes correct solvers/rewriters
+    # (anti-train).
+    parsed_selector_rewards: list[float] = []
     for sel_sample in args.results_dict["selector"]:
         response = sel_sample.response_content
         if response is None:
@@ -298,12 +338,17 @@ async def run_agent_system(args, sample):
             if r_sample.response_content is not None and selected_solution in r_sample.response_content:
                 sel_sample.reward = r_sample.reward
                 break
+        parsed_selector_rewards.append(sel_sample.reward)
 
-    ## Global reward shaping: if the average selector reward suggests success,
-    ## bonus all roles; otherwise penalize all roles.
-    mean_selector_reward = sum(s.reward for s in args.results_dict["selector"]) / len(
-        args.results_dict["selector"]
-    )
+    # Global reward shaping: if the average parsed selector reward suggests
+    # success, bonus all roles; otherwise penalize. If every selector failed
+    # to parse, we have no judgment signal — leave the raw rewards untouched
+    # so we don't anti-train correct solvers/rewriters when the selector
+    # is broken in some prompt-specific way.
+    if not parsed_selector_rewards:
+        return args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"]
+
+    mean_selector_reward = sum(parsed_selector_rewards) / len(parsed_selector_rewards)
     weight = args.correct_reward_weight if mean_selector_reward > 0.5 else args.incorrect_reward_weight
     reward_adjustment(args.results_dict["solver"], weight)
     reward_adjustment(args.results_dict["rewriter"], weight)
