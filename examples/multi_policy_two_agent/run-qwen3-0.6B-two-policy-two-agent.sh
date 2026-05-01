@@ -41,8 +41,8 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 2
    --disable-rollout-trim-samples
-   --rollout-max-context-len 16384
-   --rollout-max-response-len 1024
+   --rollout-max-context-len 32768
+   --rollout-max-response-len 16384
    --rollout-temperature 1
    --balance-data
 )

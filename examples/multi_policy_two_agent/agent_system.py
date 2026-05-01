@@ -13,6 +13,7 @@ Reward shaping:
 """
 
 import asyncio
+import itertools
 import re
 import time
 import traceback
@@ -24,6 +25,12 @@ from slime.utils.http_utils import post
 from slime.utils.types import Sample
 
 from .prompts import SOLVER_PROMPT_TEMPLATE, generate_select_template
+
+# Unique-index source for inner samples. run_agent_system spawns num_parallel
+# deep-copies of an outer sample, all of which would share the outer's index;
+# get_data_iterator's uniqueness assertion then trips on the duplicates. Using
+# a high offset keeps the inner indices well clear of slime's data_source counter.
+_INNER_SAMPLE_ID = itertools.count(start=1_000_000_000)
 
 
 async def generate_response(args, prompt, key):
@@ -68,8 +75,11 @@ async def generate_response(args, prompt, key):
             case "stop":
                 sample.status = Sample.Status.COMPLETED
 
-        # Multi-policy buffer routing tag.
+        # Multi-policy buffer routing tag + unique index per inner sample (the
+        # deepcopy from args.sample inherits the outer prompt's index, which
+        # would collide across the num_parallel siblings from this call).
         sample.policy_name = key
+        sample.index = next(_INNER_SAMPLE_ID)
         args.results_dict[key].append(sample)
 
         final = output["text"].replace("<|user|>", "")
@@ -115,8 +125,13 @@ class SelectorAgent(Agent):
         return await self.run(args, prompt, max_retries=10, key="selector")
 
     def extract_selected_solution_idx(self, response: str, candidate_solutions: list[str]) -> int | None:
-        PATTERN = re.compile(r"Judgment:\s*(\d+)")
+        # The prompt asks for "Judgment: IDX" but the model frequently echoes
+        # the literal "IDX" token (e.g. "Judgment: IDX 1" or "Judgment: IDX1").
+        # Allow optional "IDX" or "Solution" filler between the colon and digit.
+        PATTERN = re.compile(r"Judgment:\s*(?:IDX|Solution)?\s*#?(\d+)", re.IGNORECASE)
         matched = PATTERN.findall(response)
+        if not matched:
+            return None
         try:
             selected_id = int(matched[0]) - 1
             if 0 <= selected_id < len(candidate_solutions):
