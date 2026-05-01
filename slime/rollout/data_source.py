@@ -124,6 +124,9 @@ class RolloutDataSource(DataSource):
         if not self.args.rollout_global_dataset:
             return
 
+        if self.args.save is None:
+            return
+
         state_dict = {
             "sample_offset": self.sample_offset,
             "epoch_id": self.epoch_id,

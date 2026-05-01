@@ -818,22 +818,43 @@ class RolloutManager:
 
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
-        if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
-            logger.info(f"Save debug rollout data to {path}")
+        if (path_template := self.args.save_debug_rollout_data) is None:
+            return
+
+        rid_str = ("eval_" if evaluation else "") + str(rollout_id)
+
+        def _dump(samples, policy_name: str):
+            fmt_kwargs = {"rollout_id": rid_str}
+            if "{policy_name}" in path_template:
+                fmt_kwargs["policy_name"] = policy_name
+            path = Path(path_template.format(**fmt_kwargs))
+            logger.info(f"Save debug rollout data ({policy_name}) to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                dict(
+                    rollout_id=rollout_id,
+                    policy_name=policy_name,
+                    samples=[s.to_dict() for s in samples],
+                ),
+                path,
+            )
 
-            # TODO may improve the format
-            if evaluation:
-                dump_data = dict(
-                    samples=[sample.to_dict() for dataset_name, info in data.items() for sample in info["samples"]]
-                )
-            else:
-                dump_data = dict(
-                    samples=[sample.to_dict() for sample in data],
-                )
+        if evaluation:
+            samples = [sample for _, info in data.items() for sample in info["samples"]]
+            _dump(samples, policy_name="eval")
+            return
 
-            torch.save(dict(rollout_id=rollout_id, **dump_data), path)
+        # Multi-policy training: bucket by Sample.policy_name and emit per-role
+        # dumps so each role's debug data lands in its own file. Falls back to
+        # a single "default" file when no samples carry a policy tag.
+        buckets = self._split_by_policy(data)
+        if "{policy_name}" in path_template:
+            for name, samples in buckets.items():
+                _dump(samples, policy_name=("default" if name == "__shared__" else name))
+        else:
+            # Legacy template without {policy_name}: dump everything together
+            # for back-compat with existing single-policy debug pipelines.
+            _dump(data, policy_name="default")
 
     def _split_by_policy(self, samples: list[Sample]) -> dict[str, list[Sample]]:
         """Bucket samples by Sample.policy_name. {"__shared__": samples} when none tagged.

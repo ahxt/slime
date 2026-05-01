@@ -1117,7 +1117,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "Save the rollout data to this path for debugging. "
-                    "The file will be saved to `save_debug_rollout_data.format(rollout_id)`."
+                    "Supported placeholders: {rollout_id}, {policy_name}. "
+                    "When {policy_name} is present, multi-policy runs emit one "
+                    "file per role (Sample.policy_name); single-policy runs use "
+                    "'default'."
                 ),
             )
             # --load-debug-rollout-data, --debug-rollout-only, --debug-train-only
@@ -1718,11 +1721,15 @@ def slime_validate_args(args):
         args.eval_reward_key = args.reward_key
 
     if args.dump_details is not None:
-        args.save_debug_rollout_data = f"{args.dump_details}/rollout_data/{{rollout_id}}.pt"
-        # Single-policy parity: keep the legacy path. Multi-policy users wanting
-        # per-policy dirs can pass --save-debug-train-data with {policy_name}/ in
-        # the template explicitly.
-        args.save_debug_train_data = f"{args.dump_details}/train_data/{{rollout_id}}_{{rank}}.pt"
+        # Per-policy dirs: {policy_name} resolves to "default" in single-policy
+        # runs (matches train_dump_utils' default) and to the actual policy name
+        # in multi-policy runs.
+        args.save_debug_rollout_data = (
+            f"{args.dump_details}/rollout_data/{{policy_name}}/{{rollout_id}}.pt"
+        )
+        args.save_debug_train_data = (
+            f"{args.dump_details}/train_data/{{policy_name}}/{{rollout_id}}_{{rank}}.pt"
+        )
 
     if args.load_debug_rollout_data is not None:
         logger.info(
