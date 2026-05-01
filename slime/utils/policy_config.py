@@ -91,6 +91,7 @@ class PolicyConfig:
     global_batch_size: int = 64
     use_dynamic_batch_size: bool = False
     max_tokens_per_gpu: int | None = None
+    log_probs_max_tokens_per_gpu: int | None = None  # falls back to max_tokens_per_gpu
 
     # ── Optimizer (per-policy — each actor has its own optimizer state) ──
     optimizer: str = "adam"
@@ -325,12 +326,24 @@ def config_to_namespace(cfg: "PolicyConfig", base_args):
         if not getattr(ns, "tokenizer_type", None):
             ns.tokenizer_type = "HuggingFaceTokenizer"
 
-    # Mirror slime_validate_args' defaulting: per-policy PPO clip-high falls
-    # back to clip-low when YAML omits it. Upstream sets this once on global
-    # args; per-policy actors inherit cfg.eps_clip_high which is None unless
-    # explicitly set in YAML.
+    # Mirror slime_validate_args' per-policy-affecting defaults. Upstream
+    # runs these once on global args at parse_args time; per-policy actors
+    # only inherit values from their own cfg, so we re-apply the same logic
+    # here. (Bugs of the form "policy A trains fine because eps_clip_high=0.28
+    # was on the actor's args, but policy B crashes because its YAML omitted
+    # eps_clip_high and ns.eps_clip_high stayed None.")
     if getattr(ns, "eps_clip_high", None) is None:
         ns.eps_clip_high = ns.eps_clip
+    # n_samples_per_prompt == 1 means the GRPO group has size 1; the std is
+    # zero and the group-norm divide produces NaN. Upstream forces the flag
+    # off in that case.
+    if getattr(ns, "n_samples_per_prompt", 1) == 1:
+        ns.grpo_std_normalization = False
+    # When dynamic batching is on, the log-probs forward pass uses the same
+    # token budget as the train forward unless the user overrides it.
+    if getattr(ns, "use_dynamic_batch_size", False):
+        if getattr(ns, "log_probs_max_tokens_per_gpu", None) is None:
+            ns.log_probs_max_tokens_per_gpu = ns.max_tokens_per_gpu
 
     # Re-run slime_validate_args' load resolution per policy. Upstream slime
     # runs this once at parse_args time against the GLOBAL args namespace, but

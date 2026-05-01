@@ -1248,5 +1248,58 @@ class TestEpsClipHighDefaulting:
         assert ns.eps_clip_high == 0.28
 
 
+class TestPerPolicyDerivedDefaults:
+    """Other slime_validate_args defaults that depend on per-policy values
+    and would silently miscompute on the per-policy ns without mirroring."""
+
+    def _ns(self, **overrides):
+        from argparse import Namespace
+        defaults = dict(no_load_optim=False, no_load_rng=False, finetune=False,
+                        ref_load=None, start_rollout_id=None)
+        defaults.update(overrides)
+        return Namespace(**defaults)
+
+    def test_grpo_std_normalization_off_when_n_samples_is_1(self):
+        """n_samples_per_prompt=1 means the GRPO group has size 1; std is 0
+        → group-norm divides by zero. Upstream forces grpo_std_normalization
+        off; mirror it per-policy."""
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(n_samples_per_prompt=1, grpo_std_normalization=True)
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.grpo_std_normalization is False
+
+    def test_grpo_std_normalization_kept_when_n_samples_gt_1(self):
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(n_samples_per_prompt=4, grpo_std_normalization=True)
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.grpo_std_normalization is True
+
+    def test_log_probs_max_tokens_per_gpu_falls_back(self):
+        """When use_dynamic_batch_size is on, log_probs_max_tokens_per_gpu
+        defaults to max_tokens_per_gpu — same dynamic-batch budget as the
+        train forward."""
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(use_dynamic_batch_size=True, max_tokens_per_gpu=8192,
+                             log_probs_max_tokens_per_gpu=None)
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.log_probs_max_tokens_per_gpu == 8192
+
+    def test_log_probs_max_tokens_per_gpu_explicit_preserved(self):
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(use_dynamic_batch_size=True, max_tokens_per_gpu=8192,
+                             log_probs_max_tokens_per_gpu=2048)
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.log_probs_max_tokens_per_gpu == 2048
+
+    def test_log_probs_max_tokens_per_gpu_no_op_without_dynamic_batch(self):
+        """Without use_dynamic_batch_size, slime never reads this knob; leave
+        it None (matches upstream behavior — no defaulting branch fires)."""
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(use_dynamic_batch_size=False, max_tokens_per_gpu=8192,
+                             log_probs_max_tokens_per_gpu=None)
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.log_probs_max_tokens_per_gpu is None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
