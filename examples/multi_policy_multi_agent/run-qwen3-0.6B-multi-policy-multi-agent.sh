@@ -62,8 +62,12 @@ NUM_GPUS=3
 
 TRAIN_ARGS=(
    --config "${SCRIPT_DIR}/config.yaml"
-   --save-interval 20
+   --save-interval 5
    --train-memory-margin-bytes 0
+   # Per-role rollout/train data dumps land under
+   #   <dump-details>/rollout_data/<policy_name>/<rollout_id>.pt
+   #   <dump-details>/train_data/<policy_name>/<rollout_id>_<rank>.pt
+   --dump-details /tmp/multi_policy_multi_agent/dump_details
 )
 # Note: train_multi_policy.py derives args.rollout_num_gpus from config.yaml
 # (sum of sglang_num_nodes × num_gpus_per_node across policies), so no
