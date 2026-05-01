@@ -242,6 +242,38 @@ async def select_worker(args, problem_statement, candidate_solutions, worker_id)
         return None
 
 
+def _pad_role_buffer(args, role: str, target_count: int, donor_role: str | None = None):
+    """Top up `args.results_dict[role]` to exactly `target_count` samples.
+
+    Multi-policy split-buffer routing requires each policy's buffer per
+    rollout to equal global_batch_size. When a phase early-exits or some
+    workers fail, the role's buffer ends up short and the next training
+    step trips:
+        assert len(set(sum(micro_batch_indices, []))) == num_local_samples
+    in slime/backends/megatron_utils/data.py.
+
+    Pad with zero-reward placeholders cloned from an existing role sample
+    (or from `donor_role` when this role has none yet — typically donate
+    a solver sample so selector pad has valid tokens). Each placeholder
+    gets a fresh unique index from _INNER_SAMPLE_ID.
+    """
+    samples = args.results_dict[role]
+    if len(samples) >= target_count:
+        del samples[target_count:]
+        return
+    donor_pool = samples if samples else (args.results_dict.get(donor_role) or [])
+    if not donor_pool:
+        return
+    while len(samples) < target_count:
+        placeholder = deepcopy(donor_pool[0])
+        placeholder.policy_name = role
+        placeholder.index = next(_INNER_SAMPLE_ID)
+        placeholder.reward = 0.0
+        placeholder.response_content = None
+        placeholder.reason_content = None
+        samples.append(placeholder)
+
+
 async def run_agent_system(args, sample):
     """
     Run `num_parallel` pipelines concurrently.
@@ -272,9 +304,17 @@ async def run_agent_system(args, sample):
             sample.reward = sample.reward * reward_weight
         return samples
 
+    n = args.num_parallel
+
     if len(previous_solutions) == 0:
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
-        return args.results_dict["solver"]
+        # Pad all three roles so each policy's per-rollout buffer count is the
+        # same regardless of which phase early-exits. Slime's get_data_iterator
+        # asserts num_local_samples == num_local_gbs and trips otherwise.
+        _pad_role_buffer(args, "solver", n)
+        _pad_role_buffer(args, "rewriter", n, donor_role="solver")
+        _pad_role_buffer(args, "selector", n, donor_role="solver")
+        return args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"]
 
     # Rewriting — feed the raw (un-chat-templated) problem to the rewriter
     # template so the inner solver chat tokens don't leak through.
@@ -297,7 +337,10 @@ async def run_agent_system(args, sample):
     if len(rewrited_solutions) == 0:
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
         reward_adjustment(args.results_dict["rewriter"], args.incorrect_reward_weight)
-        return args.results_dict["solver"] + args.results_dict["rewriter"]
+        _pad_role_buffer(args, "solver", n)
+        _pad_role_buffer(args, "rewriter", n, donor_role="solver")
+        _pad_role_buffer(args, "selector", n, donor_role="solver")
+        return args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"]
 
     # Selection — run num_parallel selectors so the selector policy gets enough
     # trajectories per problem for GRPO group-norm (matches n_samples_per_prompt).
@@ -313,7 +356,10 @@ async def run_agent_system(args, sample):
     if len(args.results_dict["selector"]) == 0:
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
         reward_adjustment(args.results_dict["rewriter"], args.incorrect_reward_weight)
-        return args.results_dict["solver"] + args.results_dict["rewriter"]
+        _pad_role_buffer(args, "solver", n)
+        _pad_role_buffer(args, "rewriter", n, donor_role="solver")
+        _pad_role_buffer(args, "selector", n, donor_role="solver")
+        return args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"]
 
     # Assign each selector trajectory its own reward based on which rewriter solution
     # it picked. Use sample.response_content (set by generate_response) so the order
@@ -346,6 +392,9 @@ async def run_agent_system(args, sample):
     # so we don't anti-train correct solvers/rewriters when the selector
     # is broken in some prompt-specific way.
     if not parsed_selector_rewards:
+        _pad_role_buffer(args, "solver", n)
+        _pad_role_buffer(args, "rewriter", n, donor_role="solver")
+        _pad_role_buffer(args, "selector", n, donor_role="solver")
         return args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"]
 
     mean_selector_reward = sum(parsed_selector_rewards) / len(parsed_selector_rewards)
@@ -353,5 +402,10 @@ async def run_agent_system(args, sample):
     reward_adjustment(args.results_dict["solver"], weight)
     reward_adjustment(args.results_dict["rewriter"], weight)
     reward_adjustment(args.results_dict["selector"], weight)
+
+    # Final guard: ensure each role's buffer is exactly num_parallel.
+    _pad_role_buffer(args, "solver", n)
+    _pad_role_buffer(args, "rewriter", n, donor_role="solver")
+    _pad_role_buffer(args, "selector", n, donor_role="solver")
 
     return args.results_dict["solver"] + args.results_dict["rewriter"] + args.results_dict["selector"]

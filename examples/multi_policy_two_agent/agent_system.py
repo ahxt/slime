@@ -196,6 +196,38 @@ async def select_worker(args, problem_statement, candidate_solutions, worker_id)
         return None
 
 
+def _pad_role_buffer(args, role: str, target_count: int, donor_role: str | None = None):
+    """Top up `args.results_dict[role]` to exactly `target_count` samples.
+
+    The multi-policy training path requires each policy's buffer per rollout
+    to equal global_batch_size (slime's get_data_iterator asserts on this:
+    num_steps_per_rollout = num_local_samples // num_local_gbs). When a phase
+    early-exits or some workers fail, the role's buffer is short and the
+    next training step trips that assertion.
+
+    Pad with zero-reward placeholder samples cloned from an existing role
+    sample (or from `donor_role` when this role has none yet — typically
+    we donate a solver sample so the selector pad has valid tokens). Each
+    placeholder gets a fresh unique index so the inside-rollout uniqueness
+    invariants hold.
+    """
+    samples = args.results_dict[role]
+    if len(samples) >= target_count:
+        del samples[target_count:]   # also trim if somehow longer than expected
+        return
+    donor_pool = samples if samples else (args.results_dict.get(donor_role) or [])
+    if not donor_pool:
+        return  # nothing to clone from; let the assertion fire downstream
+    while len(samples) < target_count:
+        placeholder = deepcopy(donor_pool[0])
+        placeholder.policy_name = role
+        placeholder.index = next(_INNER_SAMPLE_ID)
+        placeholder.reward = 0.0
+        placeholder.response_content = None
+        placeholder.reason_content = None
+        samples.append(placeholder)
+
+
 async def run_agent_system(args, sample):
     """Run num_parallel solver pipelines + num_parallel selector pipelines.
 
@@ -231,17 +263,26 @@ async def run_agent_system(args, sample):
             s.reward = s.reward * weight
         return samples
 
+    n = args.num_parallel
+
     if len(candidate_solutions) == 0:
+        # No usable solver output; pad both roles so the per-policy buffers
+        # stay at exactly num_parallel samples (split-buffer routing requires
+        # each rollout to contribute the same count per role).
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
-        return args.results_dict["solver"]
+        _pad_role_buffer(args, "solver", n)
+        _pad_role_buffer(args, "selector", n, donor_role="solver")
+        return args.results_dict["solver"] + args.results_dict["selector"]
 
     # Phase 2 — selectors (in parallel; each picks one of the solver candidates)
-    tasks = [select_worker(args, raw_problem, candidate_solutions, wid) for wid in range(args.num_parallel)]
+    tasks = [select_worker(args, raw_problem, candidate_solutions, wid) for wid in range(n)]
     await asyncio.gather(*tasks, return_exceptions=True)
 
     if len(args.results_dict["selector"]) == 0:
         reward_adjustment(args.results_dict["solver"], args.incorrect_reward_weight)
-        return args.results_dict["solver"]
+        _pad_role_buffer(args, "solver", n)
+        _pad_role_buffer(args, "selector", n, donor_role="solver")
+        return args.results_dict["solver"] + args.results_dict["selector"]
 
     # Reward propagation: each selector sample's reward = reward of the solution
     # it picked. Match by response_content text since task order may not align.
@@ -271,6 +312,8 @@ async def run_agent_system(args, sample):
     # incorrect_reward_weight) anti-trains correct solvers when the selector
     # is broken in some prompt-specific way (#2 from the audit).
     if not parsed_selector_rewards:
+        _pad_role_buffer(args, "solver", n)
+        _pad_role_buffer(args, "selector", n, donor_role="solver")
         return args.results_dict["solver"] + args.results_dict["selector"]
 
     # Group-level reward shaping: bonus all roles when the average parsed
@@ -279,5 +322,10 @@ async def run_agent_system(args, sample):
     weight = args.correct_reward_weight if mean_selector_reward > 0.5 else args.incorrect_reward_weight
     reward_adjustment(args.results_dict["solver"], weight)
     reward_adjustment(args.results_dict["selector"], weight)
+
+    # Final guard: pad each role to exactly num_parallel so the per-rollout
+    # per-role buffer count is invariant across run_agent_system calls.
+    _pad_role_buffer(args, "solver", n)
+    _pad_role_buffer(args, "selector", n, donor_role="solver")
 
     return args.results_dict["solver"] + args.results_dict["selector"]
