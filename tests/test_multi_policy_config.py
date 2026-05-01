@@ -1223,5 +1223,30 @@ class TestWeightLoadFallback:
         assert ns.start_rollout_id == 0
 
 
+class TestEpsClipHighDefaulting:
+    """slime_validate_args sets args.eps_clip_high = args.eps_clip when None.
+    config_to_namespace must mirror this per-policy or compute_policy_loss
+    will hit `1 + None` TypeError downstream."""
+
+    def _ns(self, **overrides):
+        from argparse import Namespace
+        defaults = dict(no_load_optim=False, no_load_rng=False, finetune=False,
+                        ref_load=None, start_rollout_id=None)
+        defaults.update(overrides)
+        return Namespace(**defaults)
+
+    def test_eps_clip_high_defaults_to_eps_clip_when_none(self):
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(eps_clip=0.2, eps_clip_high=None)
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.eps_clip_high == 0.2
+
+    def test_explicit_eps_clip_high_preserved(self):
+        from slime.utils.policy_config import config_to_namespace
+        cfg = _minimal_actor(eps_clip=0.2, eps_clip_high=0.28)
+        ns = config_to_namespace(cfg, self._ns())
+        assert ns.eps_clip_high == 0.28
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

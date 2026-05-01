@@ -325,6 +325,13 @@ def config_to_namespace(cfg: "PolicyConfig", base_args):
         if not getattr(ns, "tokenizer_type", None):
             ns.tokenizer_type = "HuggingFaceTokenizer"
 
+    # Mirror slime_validate_args' defaulting: per-policy PPO clip-high falls
+    # back to clip-low when YAML omits it. Upstream sets this once on global
+    # args; per-policy actors inherit cfg.eps_clip_high which is None unless
+    # explicitly set in YAML.
+    if getattr(ns, "eps_clip_high", None) is None:
+        ns.eps_clip_high = ns.eps_clip
+
     # Re-run slime_validate_args' load resolution per policy. Upstream slime
     # runs this once at parse_args time against the GLOBAL args namespace, but
     # the globals don't see per-policy values (megatron_to_hf_mode / ref_load /
