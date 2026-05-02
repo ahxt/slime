@@ -1,0 +1,186 @@
+# Multi-agent debate config — generator (A^G) + critic (A^C), no-colocate.
+#
+# Reference: Subramaniam et al. 2025, "Multiagent Finetuning of Language
+# Models" (https://arxiv.org/abs/2501.05707), Algorithm 1.
+#
+# Task: two cooperating policies on math problems (DAPO-math-17k).
+#   Pipeline (per outer slot, with N=num_parallel=3 agents and M=rounds=3):
+#     m=0:        N parallel generators (A^G) propose initial responses.
+#                 → trained as `generator` policy.
+#     m=1..M-1:   For each agent i:
+#                   summary_i = summarize subroutine over OTHER N-1 agents'
+#                               round-(m-1) responses (untracked — paper's
+#                               A^S, routed through generator engine, not
+#                               trained as a separate policy).
+#                   critic_i takes summary_i, produces updated response.
+#                 → trained as `critic` policy.
+#
+#   Reward (paper-aligned, Algorithm 1 lines 23-26):
+#     ŷ = majority vote over the FINAL critic responses (per slot).
+#     - generator (round 0): 1 if y_{1,n} = ŷ, else 0.
+#     - critic    (any round): trajectory-level — 1 if THIS AGENT's FINAL
+#       critic response = ŷ, else 0. Propagated to all critic rounds for
+#       the same agent index (rounds 1..M-1).
+#     The dataset's ground-truth label is INTENTIONALLY ignored to stay
+#     faithful to the paper's self-improvement-without-ground-truth
+#     premise. The recovery vs. stable-correct distinction (D^{C-} vs
+#     D^{C+}) used by the paper for SFT data sampling is absorbed
+#     implicitly: critics that produce a final correct answer get reward
+#     1 regardless of whether round-0 was correct, and the policy
+#     gradient with group-norm naturally upweights successful recoveries.
+#
+#   KL anchor (kl_coef = 0.005) on both policies prevents drift / mode
+#   collapse — especially for the critic, which is trained on a coupled
+#   target (correctness AFTER reading summaries that depend on the
+#   generator's outputs, which are themselves changing).
+#
+#   Each policy is its own Megatron actor paired 1:1 with its own sglang
+#   engine. buffer_mode=split routes Sample.policy_name to the matching
+#   policy's buffer. Summarize-subroutine samples are NOT added to
+#   results_dict, so they don't appear in either training buffer.
+#
+# Per-rollout sample counts (rb=32, nsp=4, num_parallel=3, rounds=3):
+#   generator: 32 prompts × 4 slots × 3 samples/slot = 384
+#   critic:    32 prompts × 4 slots × 6 samples/slot = 768
+#   summarize: 32 × 4 × 6 = 768 sglang calls (untracked, no training)
+#
+# Cluster sizing (no --colocate):
+#   actor_gpus = 2, rollout_gpus = 2, total = 4
+# Layout: GPUs 0,1 = Megatron actors; GPUs 2,3 = sglang engines.
+
+policies:
+
+  # ─── generator (A^G) ──────────────────────────────────────────────────────
+  - name: generator
+    role: actor
+
+    hf_checkpoint: /root/Qwen3-0.6B
+    save: /ckpt/multi_policy_multiagent_debate/qwen3-0.6b/generator
+
+    buffer_mode: split
+
+    num_gpus_per_node: 1
+    megatron_num_nodes: 1
+    sglang_num_nodes: 1
+
+    megatron:
+      megatron_to_hf_mode: bridge
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+
+      recompute_granularity: full
+      recompute_method: uniform
+      recompute_num_layers: 1
+
+      attention_dropout: 0.0
+      hidden_dropout: 0.0
+      accumulate_allreduce_grads_in_fp32: true
+      attention_softmax_in_fp32: true
+
+      log_probs_chunk_size: 512
+
+      micro_batch_size: 1
+      global_batch_size: 192       # 384 / 192 = 2 train steps per rollout
+      use_dynamic_batch_size: true
+      max_tokens_per_gpu: 8192
+
+      optimizer: adam
+      lr: 1.0e-6
+      lr_decay_style: constant
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.98
+      optimizer_cpu_offload: true
+      overlap_cpu_optimizer_d2h_h2d: true
+      use_precision_aware_optimizer: true
+
+      advantage_estimator: grpo
+      n_samples_per_prompt: 4
+      eps_clip: 0.2
+      eps_clip_high: 0.28
+      kl_coef: 0.005             # KL anchor — prevent drift / mode collapse
+      use_kl_loss: false
+      kl_loss_coef: 0
+
+    sglang:
+      update_weights: true
+      num_gpus_per_engine: 1
+      mem_fraction_static: 0.85
+      cuda_graph_bs: [1, 2, 4, 8, 16, 32]
+      chunked_prefill_size: 4096
+      max_running_requests: 32
+      max_total_tokens: 131072
+      log_level: info
+      server_groups:
+        - worker_type: regular
+          num_gpus: 1
+
+  # ─── critic (A^C) ─────────────────────────────────────────────────────────
+  - name: critic
+    role: actor
+
+    hf_checkpoint: /root/Qwen3-0.6B
+    save: /ckpt/multi_policy_multiagent_debate/qwen3-0.6b/critic
+
+    buffer_mode: split
+
+    num_gpus_per_node: 1
+    megatron_num_nodes: 1
+    sglang_num_nodes: 1
+
+    megatron:
+      megatron_to_hf_mode: bridge
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+
+      recompute_granularity: full
+      recompute_method: uniform
+      recompute_num_layers: 1
+
+      attention_dropout: 0.0
+      hidden_dropout: 0.0
+      accumulate_allreduce_grads_in_fp32: true
+      attention_softmax_in_fp32: true
+
+      log_probs_chunk_size: 512
+
+      micro_batch_size: 1
+      global_batch_size: 384       # 768 / 384 = 2 train steps per rollout
+      use_dynamic_batch_size: true
+      max_tokens_per_gpu: 8192
+
+      optimizer: adam
+      lr: 1.0e-6
+      lr_decay_style: constant
+      weight_decay: 0.1
+      adam_beta1: 0.9
+      adam_beta2: 0.98
+      optimizer_cpu_offload: true
+      overlap_cpu_optimizer_d2h_h2d: true
+      use_precision_aware_optimizer: true
+
+      advantage_estimator: grpo
+      n_samples_per_prompt: 4
+      eps_clip: 0.2
+      kl_coef: 0.005
+      use_kl_loss: false
+      kl_loss_coef: 0
+
+    sglang:
+      update_weights: true
+      num_gpus_per_engine: 1
+      mem_fraction_static: 0.85
+      cuda_graph_bs: [1, 2, 4, 8, 16, 32]
+      chunked_prefill_size: 4096
+      max_running_requests: 32
+      max_total_tokens: 131072
+      log_level: info
+      server_groups:
+        - worker_type: regular
+          num_gpus: 1
