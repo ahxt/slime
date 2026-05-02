@@ -29,10 +29,12 @@
 #     1 regardless of whether round-0 was correct, and the policy
 #     gradient with group-norm naturally upweights successful recoveries.
 #
-#   KL anchor (kl_coef = 0.005) on both policies prevents drift / mode
-#   collapse — especially for the critic, which is trained on a coupled
-#   target (correctness AFTER reading summaries that depend on the
-#   generator's outputs, which are themselves changing).
+#   KL anchor disabled (kl_coef = 0) — enabling it requires a per-policy
+#   ref_load path to a Qwen3-0.6B torch_dist checkpoint, which isn't set
+#   up by default in this example. If you observe summarizer mode-collapse
+#   in practice (degenerate outputs, copy-verbatim, empty summaries), set
+#   kl_coef and ref_load on each policy to add a KL anchor to the initial
+#   distribution.
 #
 #   Each policy is its own Megatron actor paired 1:1 with its own sglang
 #   engine. buffer_mode=split routes Sample.policy_name to the matching
@@ -101,7 +103,11 @@ policies:
       n_samples_per_prompt: 4
       eps_clip: 0.2
       eps_clip_high: 0.28
-      kl_coef: 0.005             # KL anchor — prevent drift / mode collapse
+      # KL anchor disabled — kl_coef != 0 triggers with_ref=True
+      # (placement_group.py:319) which requires args.ref_load to point at
+      # a Qwen3-0.6B torch_dist checkpoint. To re-enable, set kl_coef
+      # AND ref_load above on each policy.
+      kl_coef: 0
       use_kl_loss: false
       kl_loss_coef: 0
 
@@ -168,7 +174,8 @@ policies:
       advantage_estimator: grpo
       n_samples_per_prompt: 4
       eps_clip: 0.2
-      kl_coef: 0.005
+      # See note on generator's kl_coef.
+      kl_coef: 0
       use_kl_loss: false
       kl_loss_coef: 0
 
