@@ -34,7 +34,7 @@ Synthesis Process:
 - Keep the explanation short but complete.
 
 End your response with EXACTLY this format on its own line:
-Answer: \\boxed{{ANSWER}}
+Answer: \\boxed{{{{ANSWER}}}}
 where ANSWER is the final numeric or symbolic answer.
 
 ### Problem
