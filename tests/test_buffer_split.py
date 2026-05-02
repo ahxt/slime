@@ -231,6 +231,47 @@ class TestPostProcessRewardsArgsFallback:
         _, rewards = mgr._post_process_rewards(samples, policy_args=p_args)
         assert rewards == pytest.approx([0.5, -0.5, 0.5, -0.5])
 
+    def test_multi_agent_total_exceeds_nsp_times_rb(self):
+        """Multi-agent rollouts emit k samples per (prompt, n_idx), so
+        total = rb × nsp × k, not rb × nsp. Group-by-prompt must still fire
+        instead of falling to single-batch normalization."""
+        mgr = _make_manager()
+        p_args = _default_args(
+            advantage_estimator="grpo",
+            rewards_normalization=True,
+            grpo_std_normalization=False,
+            n_samples_per_prompt=4,
+            rollout_batch_size=2,
+        )
+        # Prompt 0: 4 correct (1.2), 12 wrong (0.0) → mean 0.3, advantage +0.9 / -0.3.
+        # Prompt 1: all wrong → zero-variance group → all advantages 0.
+        rewards_p0 = [1.2] * 4 + [0.0] * 12
+        rewards_p1 = [0.0] * 16
+        samples = [_make_sample(reward=r) for r in rewards_p0 + rewards_p1]
+        _, rewards = mgr._post_process_rewards(samples, policy_args=p_args)
+        assert rewards[:4] == pytest.approx([0.9, 0.9, 0.9, 0.9])
+        assert rewards[4:16] == pytest.approx([-0.3] * 12)
+        assert rewards[16:] == pytest.approx([0.0] * 16)
+
+    def test_uneven_batch_falls_back_to_single_group(self):
+        """When total isn't divisible by rollout_batch_size (e.g. samples
+        dropped mid-rollout), fall back to single-batch normalization
+        instead of crashing."""
+        mgr = _make_manager()
+        p_args = _default_args(
+            advantage_estimator="grpo",
+            rewards_normalization=True,
+            grpo_std_normalization=False,
+            n_samples_per_prompt=4,
+            rollout_batch_size=2,
+        )
+        # 15 samples — not divisible by rb=2.
+        samples = [_make_sample(reward=r) for r in [1.0] * 8 + [0.0] * 7]
+        _, rewards = mgr._post_process_rewards(samples, policy_args=p_args)
+        # Single-batch mean = 8/15 ≈ 0.533.
+        assert len(rewards) == 15
+        assert sum(rewards) == pytest.approx(0.0, abs=1e-5)
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # _convert_samples_to_train_data — policy_args propagation

@@ -886,13 +886,25 @@ class RolloutManager:
             args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
             and args.rewards_normalization
         ):
-            # group norm
+            # group norm — group by prompt (= rollout_batch_size groups, each of
+            # size total // rollout_batch_size). This handles three cases with
+            # one rule:
+            #   * single-agent: total = rb × nsp → group size = nsp (legacy behavior).
+            #   * multi-agent: each (prompt, n_idx) call emits k samples per role,
+            #     so total = rb × nsp × k → group size = nsp × k. Grouping by
+            #     prompt is the GRPO-correct baseline (compare trajectories that
+            #     shared the same task).
+            #   * uneven groups (some samples dropped): falls through to the
+            #     "one big batch" fallback so we don't crash.
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == args.n_samples_per_prompt * args.rollout_batch_size:
-                rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+            total = rewards.shape[-1]
+            rb = args.rollout_batch_size
+            if total > 0 and total % rb == 0:
+                rewards = rewards.reshape(rb, total // rb)
             else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
+                # samples missing from some groups — fall back to single-batch
+                # normalization, matching the legacy behavior.
+                rewards = rewards.view(-1, total)
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
