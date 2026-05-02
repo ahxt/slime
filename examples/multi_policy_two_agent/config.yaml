@@ -1,6 +1,24 @@
 # Two-agent multi-policy config — solver + selector, no-colocate sizing.
 #
-# Cluster sizing (4-L40S box, no --colocate):
+# Task: two cooperating policies on math problems (DAPO-math-17k).
+#   Pipeline (N=num_parallel=4 trajectories per role per prompt):
+#     1. solver    — N parallel solvers each produce a candidate solution.
+#     2. selector  — N parallel selectors each see ALL N solver candidates
+#                    and emit "Judgment: IDX" picking one as best.
+#
+#   Reward (rule-based RM scores correctness per role):
+#     - solver: direct correctness reward from the RM.
+#     - selector: inherits the reward of whichever solver candidate it picked.
+#     - Group shaping: if mean parsed-selector reward > 0.5, both roles'
+#       rewards × correct_reward_weight (1.2); else × incorrect_reward_weight
+#       (0.8). When every selector fails to parse, raw rewards are preserved
+#       (anti-train guard — broken selector must not penalize correct solvers).
+#
+#   Each policy is its own Megatron actor paired 1:1 with its own sglang engine
+#   (buffer_mode=split routes Sample.policy_name to the matching policy's
+#   buffer; n_samples_per_prompt = num_parallel = 4 for GRPO group-norm).
+#
+# Cluster sizing (no --colocate):
 #   actor_gpus   = sum(megatron_num_nodes * num_gpus_per_node) = 2 × 1 × 1 = 2
 #   rollout_gpus = sum(sglang_num_nodes   * num_gpus_per_node) = 2 × 1 × 1 = 2
 #   total        = actor_gpus + rollout_gpus                   = 4

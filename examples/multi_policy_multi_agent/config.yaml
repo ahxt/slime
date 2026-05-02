@@ -1,12 +1,32 @@
 # Multi-policy multi-agent config — single source of truth.
 #
+# Task: three cooperating policies on math problems (DAPO-math-17k).
+#   Pipeline (N=num_parallel=4 trajectories per role per prompt):
+#     1. solver    — N parallel solvers each produce a candidate solution.
+#     2. rewriter  — N parallel rewriters each see ALL N solver candidates and
+#                    synthesize a refined solution (one per worker).
+#     3. selector  — N parallel selectors each see ALL N rewriter candidates
+#                    and emit "Judgment: IDX" picking one as best.
+#
+#   Reward (rule-based RM scores correctness per role):
+#     - solver/rewriter: direct correctness reward from the RM.
+#     - selector: inherits the reward of whichever rewriter candidate it picked.
+#     - Group shaping: if mean parsed-selector reward > 0.5, all three roles'
+#       rewards × correct_reward_weight (1.2); else × incorrect_reward_weight
+#       (0.8). When every selector fails to parse, raw rewards are preserved
+#       (anti-train guard — broken selector must not penalize correct upstream).
+#
+#   Each policy is its own Megatron actor paired 1:1 with its own sglang engine
+#   (buffer_mode=split routes Sample.policy_name to the matching policy's
+#   buffer; n_samples_per_prompt = num_parallel = 4 for GRPO group-norm).
+#
 # Each entry under `policies:`:
 #   name, role                           — identity
 #   hf_checkpoint                        — base model
 #   load, save                           — checkpoint dirs (per-policy)
 #   ref_load                             — KL ref checkpoint (optional)
 #   buffer_mode                          — "split" | "shared". Routes Sample.policy_name.
-#   num_gpus_per_node                    — v1 per-policy GPU slice size (1 here: 3 policies × 1 = 3 GPUs on a 4-L40S box)
+#   num_gpus_per_node                    — per-policy GPU slice size on each side
 #   megatron_num_nodes                   — Megatron actor placement (world_size = nodes × num_gpus_per_node)
 #   sglang_num_nodes                     — sglang engine placement for this policy's 1:1 engine
 #                                          (sglang_num_nodes × num_gpus_per_node must equal
