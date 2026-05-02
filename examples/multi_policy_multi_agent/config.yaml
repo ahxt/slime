@@ -85,7 +85,7 @@ policies:
       log_probs_chunk_size: 512
 
       micro_batch_size: 1
-      global_batch_size: 32
+      global_batch_size: 128
       use_dynamic_batch_size: true
       max_tokens_per_gpu: 2048
 
@@ -166,7 +166,7 @@ policies:
       log_probs_chunk_size: 512
 
       micro_batch_size: 1
-      global_batch_size: 32
+      global_batch_size: 128
       use_dynamic_batch_size: true
       max_tokens_per_gpu: 2048
 
@@ -238,7 +238,7 @@ policies:
       log_probs_chunk_size: 512
 
       micro_batch_size: 1
-      global_batch_size: 32
+      global_batch_size: 128
       use_dynamic_batch_size: true
       max_tokens_per_gpu: 2048
 
