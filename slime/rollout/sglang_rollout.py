@@ -419,6 +419,44 @@ async def generate_rollout_async(
     all_data = []
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
+
+    # Per-role progress tracking. role_totals is filled in lazily from the
+    # first completed task: count samples per Sample.policy_name in that
+    # task and multiply by target_data_size (one task = one outer
+    # rollout-batch slot). Single-policy runs end up with one role keyed
+    # under "default".
+    role_done: dict[str, int] = {}
+    role_trunc: dict[str, int] = {}
+    role_tokens: dict[str, int] = {}
+    role_totals: dict[str, int] = {}
+
+    def _flatten_samples(g):
+        """Multi-agent groups are list[list[Sample]]; single-agent groups
+        are list[Sample]. Flatten either shape to list[Sample]."""
+        out = []
+        for item in g:
+            if isinstance(item, list):
+                out.extend(item)
+            else:
+                out.append(item)
+        return out
+
+    def _refresh_postfix():
+        # gen / pend are at the outer-task level (slime doesn't see sglang's
+        # internal queue). Each task may dispatch many sglang requests for
+        # multi-agent.
+        gen = len(state.pendings)
+        pend = max(target_data_size - len(data) - gen, 0)
+        parts = [f"gen={gen} pend={pend}"]
+        for role in sorted(role_done):
+            d = role_done[role]
+            t = role_totals.get(role, 0)
+            trunc_pct = (100.0 * role_trunc[role] / d) if d else 0.0
+            avg_len = (role_tokens[role] / d) if d else 0.0
+            stats = f"done={d}/{t} trunc={trunc_pct:.0f}% len={int(avg_len)}"
+            parts.append(stats if role == "default" else f"{role}({stats})")
+        pbar.set_postfix_str(", ".join(parts), refresh=False)
+
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
@@ -438,11 +476,34 @@ async def generate_rollout_async(
                 do_print = False
 
             assert len(group) == args.n_samples_per_prompt
+
+            # Per-role accounting (counted across both kept and dropped tasks
+            # so the rates reflect what sglang actually produced).
+            flat = _flatten_samples(group)
+            if not role_totals:
+                # Lock in per-role total from the first completed task.
+                first_counts: dict[str, int] = {}
+                for s in flat:
+                    role = getattr(s, "policy_name", None) or "default"
+                    first_counts[role] = first_counts.get(role, 0) + 1
+                for role, c in first_counts.items():
+                    role_totals[role] = c * target_data_size
+                    role_done.setdefault(role, 0)
+                    role_trunc.setdefault(role, 0)
+                    role_tokens.setdefault(role, 0)
+            for s in flat:
+                role = getattr(s, "policy_name", None) or "default"
+                role_done[role] = role_done.get(role, 0) + 1
+                role_tokens[role] = role_tokens.get(role, 0) + (getattr(s, "response_length", 0) or 0)
+                if getattr(s, "status", None) == Sample.Status.TRUNCATED:
+                    role_trunc[role] = role_trunc.get(role, 0) + 1
+
             all_data.append(group)
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
+                _refresh_postfix()
                 continue
 
             # add the samples to the data
@@ -450,6 +511,7 @@ async def generate_rollout_async(
             if len(data) < target_data_size:
                 data.append(group)
                 pbar.update(args.n_samples_per_prompt)
+                _refresh_postfix()
 
     pbar.close()
     sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
