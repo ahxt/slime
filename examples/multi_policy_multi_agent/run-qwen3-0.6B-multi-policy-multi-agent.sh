@@ -67,6 +67,7 @@ TRAIN_ARGS=(
    # Per-role rollout/train data dumps land under
    #   <dump-details>/<policy_name>/rollout_data/<rollout_id>.pt
    #   <dump-details>/<policy_name>/train_data/<rollout_id>_<rank>.pt
+   #   <dump-details>/<policy_name>/packed_data/<rollout_id>_<rank>.pt
    --dump-details /tmp/multi_policy_multi_agent/dump_details
 )
 # Note: train_multi_policy.py derives args.rollout_num_gpus from config.yaml

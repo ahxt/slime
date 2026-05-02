@@ -1141,6 +1141,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--save-debug-packed-data",
+                type=str,
+                default=None,
+                help=(
+                    "Save the per-rollout list of packed micro-batches (CP-sliced "
+                    "tokens, packed_seq_params, advantages, log_probs, ...) to this "
+                    "path. Once per rollout per rank. Path placeholders: "
+                    "{rollout_id}, {rank}, {policy_name}."
+                ),
+            )
+            parser.add_argument(
                 "--dump-details",
                 type=str,
                 default=None,
@@ -1724,12 +1735,15 @@ def slime_validate_args(args):
         # Top-level grouping is by role: <dump-details>/<policy_name>/<kind>/...
         # In single-policy runs {policy_name} resolves to "default" (matches
         # train_dump_utils' default); in multi-policy runs each role gets its
-        # own subtree containing both rollout_data/ and train_data/.
+        # own subtree containing rollout_data/, train_data/, and packed_data/.
         args.save_debug_rollout_data = (
             f"{args.dump_details}/{{policy_name}}/rollout_data/{{rollout_id}}.pt"
         )
         args.save_debug_train_data = (
             f"{args.dump_details}/{{policy_name}}/train_data/{{rollout_id}}_{{rank}}.pt"
+        )
+        args.save_debug_packed_data = (
+            f"{args.dump_details}/{{policy_name}}/packed_data/{{rollout_id}}_{{rank}}.pt"
         )
 
     if args.load_debug_rollout_data is not None:

@@ -22,7 +22,7 @@ from megatron.core.utils import get_model_config, unwrap_model
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-from slime.utils import logging_utils
+from slime.utils import logging_utils, train_dump_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -400,6 +400,11 @@ def train_one_step(
         custom_before_train_step_hook = load_function(args.custom_megatron_before_train_step_hook_path)
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
 
+    # Per-step microbatch counter for the packed-data dump. Closure-local so
+    # it resets each train_one_step invocation; uses a 1-element list because
+    # nonlocal isn't accessible from the inner forward_step.
+    _packed_mb_counter = [0]
+
     def forward_step(data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False) -> tuple[
         torch.Tensor,
         Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor | list[str]]]],
@@ -439,6 +444,17 @@ def train_one_step(
             args.qkv_format,
             args.allgather_cp,
         )
+
+        # Stash the packed batch for offline inspection (no-op unless
+        # --save-debug-packed-data / --dump-details is set). Only PP rank 0
+        # has the real input; later stages get pipeline-internal activations,
+        # so we'd be dumping junk dicts there. Once-per-rollout flush happens
+        # in MegatronTrainRayActor.train after this train_one_step returns.
+        if mpu.get_pipeline_model_parallel_rank() == 0:
+            train_dump_utils.stash_packed_batch(
+                args, batch, step_id=step_id, microbatch_idx=_packed_mb_counter[0]
+            )
+            _packed_mb_counter[0] += 1
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]

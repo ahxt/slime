@@ -493,6 +493,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.prof.step(rollout_id=rollout_id)
 
         train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
+        train_dump_utils.save_debug_packed_data(self.args, rollout_id=rollout_id)
 
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()
