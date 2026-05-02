@@ -8,8 +8,8 @@
 #     3. selector  — N parallel selectors each see ALL N rewriter candidates
 #                    and emit "Judgment: IDX" picking one as best.
 #
-#   Reward (rule-based RM scores correctness per role):
-#     - solver/rewriter: direct correctness reward from the RM.
+#   Reward (verifiable reward / RLVR scores correctness per role):
+#     - solver/rewriter: direct correctness reward from the verifier.
 #     - selector: inherits the reward of whichever rewriter candidate it picked.
 #     - Group shaping: if mean parsed-selector reward > 0.5, all three roles'
 #       rewards × correct_reward_weight (1.2); else × incorrect_reward_weight

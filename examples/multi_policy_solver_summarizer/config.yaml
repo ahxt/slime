@@ -1,18 +1,21 @@
-# Two-agent multi-policy config — solver + selector, no-colocate sizing.
+# Two-agent multi-policy config — solver + summarizer, no-colocate sizing.
 #
 # Task: two cooperating policies on math problems (DAPO-math-17k).
 #   Pipeline (N=num_parallel=4 trajectories per role per prompt):
-#     1. solver    — N parallel solvers each produce a candidate solution.
-#     2. selector  — N parallel selectors each see ALL N solver candidates
-#                    and emit "Judgment: IDX" picking one as best.
+#     1. solver      — N parallel solvers each produce a candidate solution.
+#     2. summarizer  — N parallel summarizers each see ALL N solver candidates
+#                      and synthesize one final answer (with the standard
+#                      `Answer: \boxed{...}` format).
 #
-#   Reward (verifiable reward / RLVR scores correctness per role):
-#     - solver: direct correctness reward from the verifier.
-#     - selector: inherits the reward of whichever solver candidate it picked.
-#     - Group shaping: if mean parsed-selector reward > 0.5, both roles'
+#   Reward (verifiable reward / RLVR scores correctness per role, both directly):
+#     - solver: direct correctness reward on its own response.
+#     - summarizer: direct correctness reward on its own synthesized answer
+#       (no index lookup — it's graded like any other completion).
+#     - Group shaping: if mean parsed-summarizer reward > 0.5, both roles'
 #       rewards × correct_reward_weight (1.2); else × incorrect_reward_weight
-#       (0.8). When every selector fails to parse, raw rewards are preserved
-#       (anti-train guard — broken selector must not penalize correct solvers).
+#       (0.8). When the summarizer phase fails entirely, raw rewards are
+#       preserved (anti-train guard — broken summarizer must not penalize
+#       correct solvers).
 #
 #   Each policy is its own Megatron actor paired 1:1 with its own sglang engine
 #   (buffer_mode=split routes Sample.policy_name to the matching policy's
@@ -23,7 +26,7 @@
 #   rollout_gpus = sum(sglang_num_nodes   * num_gpus_per_node) = 2 × 1 × 1 = 2
 #   total        = actor_gpus + rollout_gpus                   = 4
 #
-# Layout: GPUs 0,1 = solver+selector Megatron actors; GPUs 2,3 = sglang engines.
+# Layout: GPUs 0,1 = solver+summarizer Megatron actors; GPUs 2,3 = sglang engines.
 # No colocate ⇒ no offload/onload between train and rollout (each side has its
 # own GPU). Engines stay loaded throughout.
 #
@@ -45,7 +48,7 @@ policies:
     role: actor
 
     hf_checkpoint: /root/Qwen3-0.6B
-    save: /ckpt/multi_policy_two_agent/qwen3-0.6b/solver
+    save: /ckpt/multi_policy_solver_summarizer/qwen3-0.6b/solver
     # ref_load: /ckpt/qwen3-0.6b-torch-dist   # uncomment to resume from torch_dist
 
     buffer_mode: split
@@ -107,19 +110,19 @@ policies:
       cuda_graph_bs: [1, 2, 4, 8, 16, 32]
       chunked_prefill_size: 4096
       max_running_requests: 32
-      max_total_tokens: 131072  # 32 reqs × 16k response cap × ~headroom
+      max_total_tokens: 131072
       log_level: info
 
       server_groups:
         - worker_type: regular
           num_gpus: 1
 
-  # ─── selector ─────────────────────────────────────────────────────────────
-  - name: selector
+  # ─── summarizer ───────────────────────────────────────────────────────────
+  - name: summarizer
     role: actor
 
     hf_checkpoint: /root/Qwen3-0.6B
-    save: /ckpt/multi_policy_two_agent/qwen3-0.6b/selector
+    save: /ckpt/multi_policy_solver_summarizer/qwen3-0.6b/summarizer
 
     buffer_mode: split
 
@@ -176,7 +179,7 @@ policies:
       cuda_graph_bs: [1, 2, 4, 8, 16, 32]
       chunked_prefill_size: 4096
       max_running_requests: 32
-      max_total_tokens: 131072  # 32 reqs × 16k response cap × ~headroom
+      max_total_tokens: 131072
       log_level: info
 
       server_groups:
