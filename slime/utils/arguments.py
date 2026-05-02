@@ -1721,14 +1721,15 @@ def slime_validate_args(args):
         args.eval_reward_key = args.reward_key
 
     if args.dump_details is not None:
-        # Per-policy dirs: {policy_name} resolves to "default" in single-policy
-        # runs (matches train_dump_utils' default) and to the actual policy name
-        # in multi-policy runs.
+        # Top-level grouping is by role: <dump-details>/<policy_name>/<kind>/...
+        # In single-policy runs {policy_name} resolves to "default" (matches
+        # train_dump_utils' default); in multi-policy runs each role gets its
+        # own subtree containing both rollout_data/ and train_data/.
         args.save_debug_rollout_data = (
-            f"{args.dump_details}/rollout_data/{{policy_name}}/{{rollout_id}}.pt"
+            f"{args.dump_details}/{{policy_name}}/rollout_data/{{rollout_id}}.pt"
         )
         args.save_debug_train_data = (
-            f"{args.dump_details}/train_data/{{policy_name}}/{{rollout_id}}_{{rank}}.pt"
+            f"{args.dump_details}/{{policy_name}}/train_data/{{rollout_id}}_{{rank}}.pt"
         )
 
     if args.load_debug_rollout_data is not None:
